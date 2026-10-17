@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex};
 
 use egui::Ui;
 use lightcraft_engine::activity::{Cancel, TaskGuard};
-use lightcraft_print::sheets::Sheet;
 use lightcraft_print::spool;
 use serde_json::{Value, json};
 
@@ -42,7 +41,8 @@ pub enum Destination {
 /// The finished composition of a print: its PDF and its pages.
 struct Composed {
     pdf: Vec<u8>,
-    sheets: Vec<Sheet>,
+    /// The composed pages (16-bit Rec. 2020): a printer that lists no PDF gets them as raster in the format it lists.
+    pages: Vec<lightcraft_engine::print::PageRaster>,
 }
 
 /// A print being composed on a worker.
@@ -60,6 +60,8 @@ struct Composing {
     gray: bool,
     /// For a network print: what the dialog said when Print was pressed.
     net: Option<crate::network_glue::Captured>,
+    /// The Print Job panel's settings (colour management, print adjustment): the raster of a print is made with them too.
+    job: lightcraft_engine::print::PrintJob,
 }
 
 /// A job handed to the system spooler: the printer and the spooler's answer.
@@ -429,17 +431,7 @@ pub fn start(app: &mut LightcraftApp) -> Result<Value, String> {
                     return Err("Print cancelled".into());
                 }
                 let pdf = output::write(&pages, &job, &doc_title)?;
-                let mut sheets = Vec::with_capacity(pages.len());
-                for page in &pages {
-                    // The same conversion as the PDF's page (intent, black point, print adjustment), as sRGB.
-                    let rgb = output::sheet_rgb8(page, &job)?;
-                    let ppi = f64::from(page.ppi);
-                    sheets.push(
-                        Sheet::new(page.width, page.height, f64::from(page.width) / ppi, f64::from(page.height) / ppi, rgb)
-                            .ok_or("a page has no usable size")?,
-                    );
-                }
-                Ok(Composed { pdf, sheets })
+                Ok(Composed { pdf, pages })
             });
         let _ = tx.send(result);
     };
@@ -450,7 +442,8 @@ pub fn start(app: &mut LightcraftApp) -> Result<Value, String> {
     let fit = scaling_for(&paper, app.print_out.shrink_to_fit);
     let gray = settings.job.grayscale;
     let net = (to == Destination::Network).then(|| app.capture_network(&paper));
-    app.print_out.composing = Some(Composing { rx, progress, total, guard, to, paper, title, fit, gray, net });
+    let print_job = settings.job.clone();
+    app.print_out.composing = Some(Composing { rx, progress, total, guard, to, paper, title, fit, gray, net, job: print_job });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -563,7 +556,8 @@ fn deliver(app: &mut LightcraftApp, ctx: &egui::Context, task: Composing, compos
             let payload = crate::network_glue::Payload {
                 name: task.title,
                 pdf: Arc::new(composed.pdf),
-                sheets: Arc::new(composed.sheets),
+                pages: Arc::new(composed.pages),
+                job: task.job,
                 fit: task.fit,
                 gray: task.gray,
             };

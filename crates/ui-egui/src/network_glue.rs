@@ -22,7 +22,7 @@ use lightcraft_print::network::ipp::PrinterAttrs;
 use lightcraft_print::network::wsd::PrinterElements;
 use lightcraft_print::network::{self as station, Station};
 use lightcraft_print::network::{Duplex, Job, JobOptions, Orientation, PrintError, Quality, Scaling, UserConfirmed};
-use lightcraft_print::sheets::{Sheet, SheetConverter};
+use lightcraft_print::sheets::{PageGeometry, PageSource, SheetConverter, raster_preference};
 
 mod caps;
 pub(crate) mod tracked;
@@ -234,10 +234,45 @@ fn options(request: &Request, job_name: &str) -> (Job, JobOptions) {
 pub(crate) struct Payload {
     pub name: String,
     pub pdf: Arc<Vec<u8>>,
-    pub sheets: Arc<Vec<Sheet>>,
+    /// The composed pages (16-bit Rec. 2020), and the job settings they were composed with.
+    pub pages: Arc<Vec<lightcraft_engine::print::PageRaster>>,
+    pub job: lightcraft_engine::print::PrintJob,
     pub fit: Fit,
     /// The pages are gray: the printer is asked for monochrome as well.
     pub gray: bool,
+}
+
+/// The converter that makes this print's raster for a printer that lists no PDF. The pages stay Rec. 2020 until the
+/// printer is known: the registry picks the first of [`raster_preference`] that the printer lists in
+/// `pwg-raster-document-type-supported` (Adobe RGB when the job allows a wide gamut, 16 bits when it asks for them),
+/// and each page is made in that type through the Print module's colour conversion ([`output::sheet_samples`]).
+pub(crate) fn converter_for(payload: &Payload) -> SheetConverter {
+    use lightcraft_engine::print::output::{self, SheetFormat};
+    use lightcraft_engine::print_color::{ManagedSpace, PrintProfile};
+    use lightcraft_print::sheets::RasterType;
+    let pages = Arc::clone(&payload.pages);
+    let job = payload.job.clone();
+    let source: PageSource = Arc::new(move |index, kind| {
+        let page = pages.get(index).ok_or("no such page")?;
+        let format = SheetFormat {
+            adobe_rgb: matches!(kind, RasterType::AdobeRgb8 | RasterType::AdobeRgb16),
+            sixteen_bit: kind.bits() == 16,
+            gray: kind.is_gray(),
+        };
+        output::sheet_samples(page, &job, format)
+    });
+    let geometry = payload
+        .pages
+        .iter()
+        .filter_map(|p| {
+            let ppi = f64::from(p.ppi);
+            PageGeometry::new(p.width, p.height, f64::from(p.width) / ppi, f64::from(p.height) / ppi)
+        })
+        .collect();
+    // A printer profile or Adobe RGB in the job lets the print be described in Adobe RGB; "managed by the printer" in
+    // sRGB keeps it sRGB.
+    let wide = !matches!(payload.job.color.profile, PrintProfile::Managed { space: ManagedSpace::Srgb });
+    SheetConverter::from_source(geometry, source, raster_preference(wide, payload.job.color.sixteen_bit), payload.pdf.len())
 }
 
 /// The worker that makes the tracked print of the payload and drives it (see [`tracked`]). Each call makes a new
@@ -257,7 +292,7 @@ pub(crate) fn send_job(
         match station_for(&stations, address, transport.clone()) {
             Ok(station) => {
                 // This print's pages are what the registry converts from, when the printer lists no PDF.
-                station.set_converter(Arc::new(SheetConverter::new(Arc::clone(&payload.sheets), payload.pdf.len())));
+                station.set_converter(Arc::new(converter_for(&payload)));
                 let print = station.job(payload.pdf.as_ref().clone(), job, options, confirmed);
                 tracked::spawn(station, print, &slot, ctx.clone())
             }
@@ -453,7 +488,7 @@ impl LightcraftApp {
     /// printer, off the UI thread. It needs the person's confirmation, which it spends. Returns `true` when a job
     /// started.
     pub(crate) fn network_send(&mut self, ctx: Option<&egui::Context>, payload: Payload, paper: &str) -> bool {
-        let page_count = payload.sheets.len();
+        let page_count = payload.pages.len();
         let net = &mut self.print_net;
         let address = net.state.draft.normalized_url();
         // The attestation comes from the ticked box and nothing else.

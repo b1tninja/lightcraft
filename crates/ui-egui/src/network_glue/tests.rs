@@ -50,8 +50,15 @@ fn tiny_pdf() -> Vec<u8> {
 
 /// One 2 x 2 inch page: the PDF the printer may take as it is and the same page as pixels.
 fn payload() -> Payload {
-    let sheet = Sheet::new(40, 40, 2.0, 2.0, vec![180; 40 * 40 * 3]).expect("sheet");
-    Payload { name: "report.pdf".into(), pdf: Arc::new(tiny_pdf()), sheets: Arc::new(vec![sheet]), fit: Scaling::Exact, gray: false }
+    let page = lightcraft_engine::print::PageRaster { width: 40, height: 40, ppi: 20.0, rgb: vec![46_000; 40 * 40 * 3] };
+    Payload {
+        name: "report.pdf".into(),
+        pdf: Arc::new(tiny_pdf()),
+        pages: Arc::new(vec![page]),
+        job: lightcraft_engine::print::PrintJob::default(),
+        fit: Scaling::Exact,
+        gray: false,
+    }
 }
 
 fn send(app: &mut LightcraftApp) -> bool {
@@ -321,4 +328,43 @@ fn the_notice_for_a_print_that_ended_names_the_printer_and_no_address() {
     assert!(failed.starts_with("Office Laser: "), "{failed}");
     assert!(!failed.contains("127.0.0.1") && !failed.contains("http"), "{failed}");
     assert_eq!(notice_text(&labels, &JobView::Idle, "Office Laser"), None);
+}
+
+/// What the print becomes for a printer that lists no PDF, from the job's settings to the raster bytes: the type the
+/// registry names is the type written, in the colour space the type says, and the preference follows the job.
+#[test]
+fn the_converter_follows_the_job_and_writes_the_type_it_is_asked_for() {
+    use craft_print::{ConvertContext, Document, DocumentConverter, DocumentFormat};
+    use lightcraft_engine::print_color::{ManagedSpace, PrintProfile};
+    use lightcraft_print::sheets::RasterType::{self, *};
+
+    let mut wide = payload();
+    wide.job.color.profile = PrintProfile::Managed { space: ManagedSpace::AdobeRgb };
+    wide.job.color.sixteen_bit = true;
+    let converter = converter_for(&wide);
+    assert_eq!(converter.raster_types(), [AdobeRgb16, Srgb16, Srgb8, Sgray16, Sgray8], "Adobe RGB, 16 bits");
+    let mut srgb = payload();
+    srgb.job.color.profile = PrintProfile::Managed { space: ManagedSpace::Srgb };
+    srgb.job.color.sixteen_bit = true;
+    assert_eq!(converter_for(&srgb).raster_types(), [Srgb16, Srgb8, Sgray16, Sgray8], "managed sRGB never offers Adobe RGB");
+    srgb.job.color.sixteen_bit = false;
+    assert_eq!(converter_for(&srgb).raster_types(), [Srgb8, Sgray8], "8 bits");
+
+    let pdf = tiny_pdf();
+    let header_of = |kind: RasterType| {
+        let mut context = ConvertContext::new(craft_print::Resolution::new(20, 20), !kind.is_gray());
+        context.raster = kind;
+        let out = converter.convert(Document::pdf(&pdf), DocumentFormat::PwgRaster, &context).expect("pwg");
+        let h = out.bytes[4..4 + 1796].to_vec();
+        let at = |o: usize| u32::from_be_bytes([h[o], h[o + 1], h[o + 2], h[o + 3]]);
+        ((at(400), at(384), at(420)), out.bytes)
+    };
+    for kind in RasterType::ALL {
+        let (fields, _) = header_of(kind);
+        assert_eq!(fields, (kind.colour_space(), kind.bits(), kind.channels() as u32), "{kind:?}");
+    }
+    // The page is the same colour in two spaces: the samples differ, and the 16-bit ones are the finer description.
+    let (_, adobe) = header_of(AdobeRgb16);
+    let (_, plain) = header_of(Srgb16);
+    assert_ne!(adobe[4 + 1796..], plain[4 + 1796..], "Adobe RGB and sRGB describe the colour differently");
 }
