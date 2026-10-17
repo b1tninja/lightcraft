@@ -88,9 +88,21 @@ pub(crate) fn wsd(elements: &PrinterElements) -> Caps {
     caps_from_details(&details, formats, listed)
 }
 
-/// The media names the dialog's sheet sizes map to.
-pub(crate) const PAPER_MEDIA: &[&str] =
-    &["na_letter_8.5x11in", "na_legal_8.5x14in", "na_ledger_11x17in", "iso_a3_297x420mm", "iso_a4_210x297mm", "iso_a5_148x210mm"];
+/// The media names the dialog's sheet sizes map to ([`crate::print_dest::media_for_paper`]: the page sizes and the
+/// photo sizes). A printer's list is cut to these, so a name missing here cannot be chosen, and a job asking for it
+/// would silently use the printer's default paper.
+pub(crate) const PAPER_MEDIA: &[&str] = &[
+    "na_letter_8.5x11in",
+    "na_legal_8.5x14in",
+    "na_ledger_11x17in",
+    "iso_a3_297x420mm",
+    "iso_a4_210x297mm",
+    "iso_a5_148x210mm",
+    "na_index-4x6_4x6in",
+    "na_5x7_5x7in",
+    "na_8x10_8x10in",
+    "na_super-b_13x19in",
+];
 
 fn side_token(s: &str) -> Option<&'static str> {
     Some(match s {

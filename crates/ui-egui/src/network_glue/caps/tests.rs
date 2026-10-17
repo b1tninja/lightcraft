@@ -147,3 +147,23 @@ fn ipp_attributes_map_to_the_three_states() {
     let nothing = ipp(&PrinterAttrs::default());
     assert_eq!((nothing.sides, nothing.copies, nothing.color_modes), (Capability::Unknown, Capability::Unknown, Capability::Unknown));
 }
+
+/// Every paper the dialog can ask a printer for must survive the cut of a printer's media list, or a job for it
+/// would silently use the printer's default paper.
+#[test]
+fn every_paper_the_dialog_can_name_is_a_media_a_printer_may_list() {
+    for paper in ["letter", "legal", "tabloid", "a3", "a4", "a5", "4x6", "5x7", "8x10", "13x19"] {
+        let media = crate::print_dest::media_for_paper(paper).unwrap_or_else(|| panic!("{paper} has a media name"));
+        assert!(PAPER_MEDIA.contains(&media), "{paper}: {media} is not in PAPER_MEDIA");
+    }
+}
+
+#[test]
+fn an_ipp_printer_that_lists_a4_and_a_photo_size_keeps_both_and_a_photo_job_names_its_media() {
+    let attrs = PrinterAttrs { media: Some(vec!["iso_a4_210x297mm".into(), "na_index-4x6_4x6in".into()]), ..PrinterAttrs::default() };
+    let caps = ipp(&attrs);
+    assert_eq!(list(&caps.media_sizes), ["iso_a4_210x297mm", "na_index-4x6_4x6in"]);
+    let draft = answered(caps);
+    let request = draft.request(crate::print_dest::media_for_paper("4x6"));
+    assert_eq!(request.media_size.as_deref(), Some("na_index-4x6_4x6in"), "the 4 x 6 choice reaches the job");
+}

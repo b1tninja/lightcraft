@@ -2438,6 +2438,7 @@
   "The print job stopped unexpectedly": "Der Druckauftrag wurde unerwartet beendet",
   "The print stopped unexpectedly": "Der Druck wurde unerwartet beendet",
   "The print was not sent: query the printer and tick the confirmation.": "Der Druck wurde nicht gesendet: Drucker abfragen und Bestätigung ankreuzen.",
+  "The print settings changed while the pages were being prepared: press Print again.": "Die Druckeinstellungen wurden geändert, während die Seiten vorbereitet wurden: erneut auf Drucken klicken.",
   "The printer accepts none of the formats this document can be sent in": "Der Drucker akzeptiert keines der Formate, in denen dieses Dokument gesendet werden kann",
   "The printer address was refused": "Die Druckeradresse wurde abgelehnt",
   "The printer doesn't support this setting": "Der Drucker unterstützt diese Einstellung nicht",

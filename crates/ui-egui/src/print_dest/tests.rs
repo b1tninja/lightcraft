@@ -177,6 +177,12 @@ fn grayscale_is_the_word_everywhere_and_the_preview_and_the_pages_are_gray() {
     assert!(h.step_until(T, |h| h.app.renderer.print_gray(id).is_some()), "the gray preview rendered");
     assert!(h.app.renderer.print_gray(id).is_some_and(is_gray), "every preview pixel is gray");
     assert!(h.app.renderer.thumb(id).is_some_and(has_colour), "the colour thumbnail is still cached next to it, for the toggle back");
+    // closing the dialog with Grayscale still on releases the gray previews (they belong to the dialog)
+    h.app.ui.dialog = None;
+    assert!(h.step_until(T, |h| h.app.renderer.print_gray(id).is_none()), "the gray previews are released when the dialog closes");
+    assert!(h.app.session.print.job.grayscale, "the setting itself stays");
+    cmd(&mut h, "dialog.print", json!({}));
+    assert!(h.step_until(T, |h| h.app.renderer.print_gray(id).is_some()), "reopened, the gray preview renders again");
     // back to colour: the colour thumbnail is drawn at once and the gray ones are dropped
     click(&mut h, "check:printGrayscale");
     assert!(!h.app.session.print.job.grayscale);
@@ -279,4 +285,65 @@ fn a_printer_that_lists_pdf_gets_the_print_ready_pdf_with_the_dialogs_paper() {
     assert!(sent.starts_with(b"%PDF-"), "the Print module's PDF as it is");
     let text = String::from_utf8_lossy(&sent);
     assert!(text.contains("/MediaBox [0 0 288 432]"), "4 x 6 in in points");
+}
+
+/// The pages are composed on a worker, so the job starts after Print was pressed. What goes out is what the
+/// dialog said at the press: a change made in between (here Copies, as the review traced it) sends nothing and
+/// does not spend the confirmation.
+#[test]
+fn a_setting_changed_while_the_pages_are_composed_sends_nothing_and_keeps_the_confirmation() {
+    let printer = FakePrinter::new(Config::default());
+    let mut h = demo_with(&printer);
+    one_photo_on_4x6(&mut h);
+    open_network(&mut h);
+    query(&mut h);
+    h.app.print_net.state.draft.confirmed = true;
+    h.settle(T);
+    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    assert!(h.app.print_out.busy(), "the pages are composed on a worker");
+    // Frames have not run since Print: the composition cannot have been delivered yet.
+    h.app.print_net.state.draft.copies = 3;
+    assert!(h.step_until(T, |h| !h.app.print_out.busy()), "the composition ended");
+    h.settle(T);
+    assert_eq!(printer.jobs(), 0, "nothing was sent: the dialog no longer said what Print was pressed for");
+    assert!(h.app.print_net.state.draft.confirmed, "the confirmation was not spent");
+    assert!(!h.app.print_net.state.draft.running());
+}
+
+/// An unchanged dialog still prints: the capture does not get in the way.
+#[test]
+fn an_unchanged_dialog_still_sends_the_job_it_captured() {
+    let printer = FakePrinter::new(Config::default());
+    let mut h = demo_with(&printer);
+    one_photo_on_4x6(&mut h);
+    open_network(&mut h);
+    query(&mut h);
+    h.app.print_net.state.draft.copies = 2;
+    h.app.print_net.state.draft.confirmed = true;
+    h.settle(T);
+    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    assert!(h.step_until(T, |h| matches!(h.app.print_net.state.draft.job, JobView::Finished(_) | JobView::Failed(_))));
+    assert_eq!(printer.jobs(), 1);
+}
+
+/// The print adjustment (Print Job panel) is in the PDF; a printer that takes only raster must get it too.
+#[test]
+fn the_print_adjustment_reaches_the_raster_sent_to_a_raster_only_printer() {
+    fn raster_with(brightness: i32) -> Vec<u8> {
+        let printer = FakePrinter::new(Config { formats: vec!["image/pwg-raster"], resolutions: vec![(150, 150)], ..Config::default() });
+        let mut h = demo_with(&printer);
+        one_photo_on_4x6(&mut h);
+        cmd(&mut h, "print.set", json!({"job": {"ppi": 72.0, "color": {"brightness": brightness}}}));
+        open_network(&mut h);
+        query(&mut h);
+        h.app.print_net.state.draft.confirmed = true;
+        h.settle(T);
+        crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+        assert!(h.step_until(T, |h| matches!(h.app.print_net.state.draft.job, JobView::Finished(_) | JobView::Failed(_))));
+        printer.job(1).expect("a job").document.expect("a document")
+    }
+    let plain = raster_with(0);
+    let bright = raster_with(60);
+    assert_eq!(&plain[..4], b"RaS2");
+    assert_ne!(plain, bright, "brightness +60 changes the raster that is sent");
 }

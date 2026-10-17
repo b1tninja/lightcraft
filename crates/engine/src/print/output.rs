@@ -4,7 +4,7 @@
 //! covering the paper as an ICC-tagged, losslessly compressed 16-bit (or 8-bit) image. A printer
 //! profile is also named as the document's output intent ([`crate::print_pdf`]).
 use super::{MAX_JOB_PAGES, PageRaster, PrintJob};
-use crate::print_color::PrintColorJob;
+use crate::print_color::{ManagedSpace, PrintColorJob, PrintProfile};
 use crate::print_pdf::ImageData;
 use lightcraft_color::transfer::encode_srgb8;
 use lightcraft_color::{REC2020, SRGB};
@@ -32,6 +32,24 @@ pub fn page_to_srgb8(page: &PageRaster) -> Result<Rgba8, String> {
         *dst = [encode_srgb8(row(0)), encode_srgb8(row(1)), encode_srgb8(row(2)), 255];
     }
     Ok(out)
+}
+
+/// A composed page as the interleaved 8-bit sRGB sheet sent to a printer that takes raster or JPEG rather
+/// than PDF. It goes through the same conversion as the PDF's page image ([`PrintColorJob`]): the job's
+/// rendering intent, black point compensation and print adjustment (brightness and contrast) apply, so
+/// the printer's format does not change the print. The printer profile does not: the printer behind a
+/// raster format manages colour itself, so the colours are sRGB.
+pub fn sheet_rgb8(page: &PageRaster, job: &PrintJob) -> Result<Vec<u8>, String> {
+    let mut settings = job.color.clone();
+    settings.profile = PrintProfile::Managed { space: ManagedSpace::Srgb };
+    settings.sixteen_bit = false;
+    let color = PrintColorJob::new(&settings)?;
+    let image = color.page_image(page.width, page.height, &page.rgb)?;
+    let want = (page.width as usize).checked_mul(page.height as usize).and_then(|n| n.checked_mul(3));
+    match image.data {
+        ImageData::Raw { bits: 8, samples } if Some(samples.len()) == want => Ok(samples),
+        _ => Err("the page could not be made into an 8-bit RGB sheet".into()),
+    }
 }
 
 /// The PDF for `pages` (all the same size): one page per raster, its MediaBox the paper size in
@@ -86,6 +104,21 @@ mod tests {
         }
         assert!(page_to_srgb8(&PageRaster { width: 2, height: 2, ppi: 100.0, rgb: vec![0; 5] }).is_err());
         assert!(page_to_srgb8(&PageRaster { width: 0, height: 2, ppi: 100.0, rgb: vec![] }).is_err());
+    }
+
+    #[test]
+    fn a_sheet_gets_the_print_adjustment_like_the_pdf_does() {
+        let page = raster(2, 2, [128, 128, 128]);
+        let plain = PrintJob::default();
+        let sheet = sheet_rgb8(&page, &plain).unwrap();
+        let shown = page_to_srgb8(&page).unwrap().data[0];
+        assert!((0..3).all(|k| sheet[k].abs_diff(shown[k]) <= 1), "with no adjustment the sheet is the page: {sheet:?} vs {shown:?}");
+        let mut bright = PrintJob::default();
+        bright.color.brightness = 60.0;
+        let lit = sheet_rgb8(&page, &bright).unwrap();
+        assert!(lit[0] > sheet[0] + 10, "brightness +60 reaches the sheet: {lit:?} vs {sheet:?}");
+        assert_eq!(lit.len(), 2 * 2 * 3);
+        assert!(sheet_rgb8(&PageRaster { width: 2, height: 2, ppi: 100.0, rgb: vec![0; 5] }, &plain).is_err());
     }
 
     #[test]

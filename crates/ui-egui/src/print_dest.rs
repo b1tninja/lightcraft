@@ -58,6 +58,8 @@ struct Composing {
     fit: spool::Scaling,
     /// Composed gray: the driver is asked for monochrome too.
     gray: bool,
+    /// For a network print: what the dialog said when Print was pressed.
+    net: Option<crate::network_glue::Captured>,
 }
 
 /// A job handed to the system spooler: the printer and the spooler's answer.
@@ -367,7 +369,9 @@ pub fn section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, photos: usize) 
             r.on_hover_text(crate::i18n::tr("Off: the page keeps the size it has in the preview. On: the printer scales it into what it can print."));
         }
         if app.print_out.dest == Destination::Network {
-            let response = app.print_net.show(ui, photos > 0);
+            // Locked while the pages are composed: the job is the one Print was pressed for.
+            let locked = app.print_out.composing.is_some();
+            let response = ui.add_enabled_ui(!locked, |ui| app.print_net.show(ui, photos > 0)).inner;
             app.print_out.block = response.block;
             if let Some(p) = app.print_net.state.draft.printer() {
                 let (name, address) = (p.name.clone(), app.print_net.state.draft.url.clone());
@@ -427,8 +431,8 @@ pub fn start(app: &mut LightcraftApp) -> Result<Value, String> {
                 let pdf = output::write(&pages, &job, &doc_title)?;
                 let mut sheets = Vec::with_capacity(pages.len());
                 for page in &pages {
-                    let rgba = output::page_to_srgb8(page)?;
-                    let rgb: Vec<u8> = rgba.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
+                    // The same conversion as the PDF's page (intent, black point, print adjustment), as sRGB.
+                    let rgb = output::sheet_rgb8(page, &job)?;
                     let ppi = f64::from(page.ppi);
                     sheets.push(
                         Sheet::new(page.width, page.height, f64::from(page.width) / ppi, f64::from(page.height) / ppi, rgb)
@@ -445,7 +449,8 @@ pub fn start(app: &mut LightcraftApp) -> Result<Value, String> {
     let paper = settings.layout.page.paper.clone();
     let fit = scaling_for(&paper, app.print_out.shrink_to_fit);
     let gray = settings.job.grayscale;
-    app.print_out.composing = Some(Composing { rx, progress, total, guard, to, paper, title, fit, gray });
+    let net = (to == Destination::Network).then(|| app.capture_network(&paper));
+    app.print_out.composing = Some(Composing { rx, progress, total, guard, to, paper, title, fit, gray, net });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -458,6 +463,10 @@ pub fn start(_: &mut LightcraftApp) -> Result<Value, String> {
 /// Every frame: collect the printer list, the composed print and the spooler's answers; follow the network job.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
+    // The gray previews belong to the Print dialog: leaving it releases their textures and queued renders.
+    if app.ui.dialog != Some(crate::state::Dialog::Print) {
+        app.renderer.forget_print_gray();
+    }
     if let Some(rx) = &app.print_out.printers_rx {
         match rx.try_recv() {
             Ok(printers) => {
@@ -545,6 +554,12 @@ fn deliver(app: &mut LightcraftApp, ctx: &egui::Context, task: Composing, compos
             }
         }
         Destination::Network => {
+            // The job is what Print was pressed for: if the address, the settings or the confirmation are not
+            // what they were, nothing is sent (and the confirmation is not spent).
+            if task.net.as_ref() != Some(&app.capture_network(&task.paper)) {
+                app.toast(ctx, crate::i18n::tr("The print settings changed while the pages were being prepared: press Print again."));
+                return;
+            }
             let payload = crate::network_glue::Payload {
                 name: task.title,
                 pdf: Arc::new(composed.pdf),

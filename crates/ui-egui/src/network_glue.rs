@@ -425,10 +425,28 @@ fn notice_text(labels: &Labels<'_>, job: &net::JobView, name: &str) -> Option<St
     }
 }
 
+/// What the person asked of a network print when Print was pressed: the address, the settings that go to the
+/// printer and the one-use confirmation. The pages are composed on a worker, so the job starts later; it goes
+/// out only if the dialog still says the same thing then (the controls are also locked meanwhile).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Captured {
+    address: String,
+    request: net::Request,
+    confirmed: bool,
+}
+
 impl LightcraftApp {
     /// Use `transport` for network printing instead of the built-in HTTP one (tests; embedding).
     pub fn set_print_transport(&mut self, transport: Transport) {
         self.print_net.set_transport(transport);
+    }
+
+    /// The network request as the dialog stands now, for [`Captured`] to compare ( `paper` names the media size).
+    pub(crate) fn capture_network(&self, paper: &str) -> Captured {
+        let draft = &self.print_net.state.draft;
+        // The page count is set by the send itself, so it is not part of what the person asked.
+        let request = net::Request { expected_pages: None, ..draft.request(crate::print_dest::media_for_paper(paper)) };
+        Captured { address: draft.normalized_url(), request, confirmed: draft.confirmed }
     }
 
     /// Send the print-ready `pdf` (laid out as `sheets`, whose count is the job's page count) to the queried

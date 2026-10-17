@@ -69,6 +69,9 @@ pub enum Slot {
     HdrHistogram,
 }
 
+/// Most gray Print-preview thumbnails kept while the Print dialog pages through photos ([`Renderer::request_print_gray`]).
+pub const PRINT_GRAY_KEEP: usize = 24;
+
 pub struct Tex {
     pub key: u64,
     pub photo: PhotoId,
@@ -627,23 +630,37 @@ impl Renderer {
 
     /// Ask for the gray thumbnail `job` makes (the thumbnail job of `photo` at `bucket`); the texture comes out gray.
     pub fn request_print_gray(&mut self, photo: &Arc<lightcraft_catalog::Photo>, bucket: usize, job: RenderJob, priority: u32) {
+        // Paging through a large selection must not keep a texture for every photo visited.
+        self.trim_print_gray(photo.id, PRINT_GRAY_KEEP);
         self.print_gray_inputs.insert(photo.id, (Arc::downgrade(photo), bucket));
         self.request(Slot::PrintGray(photo.id), job, priority);
     }
 
     /// The Print dialog shows colour (or is closed): drop the gray thumbnails and their queued renders.
     pub fn forget_print_gray(&mut self) {
-        if self.print_gray_inputs.is_empty() && !self.textures.keys().any(|s| matches!(s, Slot::PrintGray(_))) {
+        self.drop_print_gray(None);
+    }
+
+    /// Once `max` gray thumbnails are held, drop all but the one for `keep` (the photo being asked for).
+    fn trim_print_gray(&mut self, keep: PhotoId, max: usize) {
+        if self.textures.keys().filter(|s| matches!(s, Slot::PrintGray(_))).count() >= max {
+            self.drop_print_gray(Some(keep));
+        }
+    }
+
+    /// Drop the gray thumbnails, their inputs and their queued renders, except the one of `keep`.
+    fn drop_print_gray(&mut self, keep: Option<PhotoId>) {
+        let dropped = |s: &Slot| matches!(s, Slot::PrintGray(id) if Some(*id) != keep);
+        if self.print_gray_inputs.is_empty() && !self.textures.keys().any(dropped) {
             return;
         }
-        self.print_gray_inputs.clear();
-        let is_gray = |s: &Slot| matches!(s, Slot::PrintGray(_));
-        self.pool.reprioritize(|s, p| if is_gray(s) { None } else { Some(p) });
-        self.queue.retain(|q| !is_gray(&q.slot));
-        self.pending.retain(|s, _| !is_gray(s));
-        self.request_ids.retain(|s, _| !is_gray(s));
-        self.textures.retain(|s, _| !is_gray(s));
-        self.failed.retain(|s, _| !is_gray(s));
+        self.print_gray_inputs.retain(|id, _| Some(*id) == keep);
+        self.pool.reprioritize(|s, p| if dropped(s) { None } else { Some(p) });
+        self.queue.retain(|q| !dropped(&q.slot));
+        self.pending.retain(|s, _| !dropped(s));
+        self.request_ids.retain(|s, _| !dropped(s));
+        self.textures.retain(|s, _| !dropped(s));
+        self.failed.retain(|s, _| !dropped(s));
     }
 
     pub fn queued(&self) -> usize {
@@ -1580,6 +1597,34 @@ mod stage_budget_tests {
 
     // Given a zoomed view showing a window, the app idling does not free the GPU copy of the
     // original the next window is cut from; once the windows are gone the idle trim runs again
+    fn gray_thumb(ctx: &egui::Context, id: u64) -> (Slot, Tex) {
+        let tex = ctx.load_texture("gray", egui::ColorImage::new([1, 1], vec![egui::Color32::GRAY]), Default::default());
+        (Slot::PrintGray(PhotoId(id)), Tex { key: 1, photo: PhotoId(id), tex, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None })
+    }
+
+    // Paging through a big selection with Grayscale on must not keep a gray thumbnail for every photo visited, and
+    // leaving the Print dialog releases them all; colour thumbnails are never touched.
+    #[test]
+    fn gray_print_previews_are_bounded_and_released() {
+        let ctx = egui::Context::default();
+        let mut r = Renderer::default();
+        for id in 1..=5 {
+            let (slot, tex) = gray_thumb(&ctx, id);
+            r.textures.insert(slot, tex);
+        }
+        r.textures.insert(Slot::Thumb(PhotoId(1)), gray_thumb(&ctx, 1).1);
+        let gray = |r: &Renderer| r.textures.keys().filter(|s| matches!(s, Slot::PrintGray(_))).count();
+        r.trim_print_gray(PhotoId(9), 6);
+        assert_eq!(gray(&r), 5, "under the bound nothing is dropped");
+        r.trim_print_gray(PhotoId(3), 5);
+        assert_eq!(gray(&r), 1, "at the bound all but the photo being asked for go");
+        assert!(r.textures.contains_key(&Slot::PrintGray(PhotoId(3))));
+        assert!(r.textures.contains_key(&Slot::Thumb(PhotoId(1))), "colour thumbnails stay");
+        r.forget_print_gray();
+        assert_eq!(gray(&r), 0, "leaving the dialog releases the last one too");
+        assert!(r.textures.contains_key(&Slot::Thumb(PhotoId(1))));
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_zoomed_view_is_not_trimmed_while_idle() {
