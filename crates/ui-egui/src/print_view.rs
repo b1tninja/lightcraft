@@ -912,13 +912,13 @@ fn ink(c: [u8; 3], gray: bool) -> Color32 {
 
 /// The photo's thumbnail for the preview, in colour: the library's when there is one. A thumbnail is kept at
 /// one size, so asking for another size here every frame made the preview and the grid behind the dialog
-/// re-render each other's thumbnail for as long as the dialog stayed open.
-fn colour_thumb(app: &mut LightcraftApp, id: PhotoId, shown: Rect) -> Option<egui::TextureId> {
+/// re-render each other's thumbnail for as long as the dialog stayed open. So once a thumbnail exists it is
+/// asked for again at the size it already has: `request_thumb` then only renders when the photo's develop
+/// settings (and so the job's key) changed, and a photo the grid isn't showing doesn't keep its stale picture.
+pub(crate) fn colour_thumb(app: &mut LightcraftApp, id: PhotoId, shown: Rect) -> Option<egui::TextureId> {
     app.renderer.forget_print_gray();
-    if app.renderer.thumb(id).is_none() {
-        let px = (shown.width().max(shown.height()) * 2.0).clamp(64.0, 1024.0) as usize;
-        crate::panels::grid::request_thumb(app, id, px, 10);
-    }
+    let px = app.renderer.thumb_bucket_of(id).unwrap_or_else(|| (shown.width().max(shown.height()) * 2.0).clamp(64.0, 1024.0) as usize);
+    crate::panels::grid::request_thumb(app, id, px, 10);
     app.renderer.thumb(id).map(|tex| tex.tex.id())
 }
 

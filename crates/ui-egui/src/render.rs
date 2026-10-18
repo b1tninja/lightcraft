@@ -346,6 +346,12 @@ impl Renderer {
         !self.request_needed(slot, key, priority)
     }
 
+    /// The size bucket `id`'s thumbnail was last requested at, while it has a texture.
+    pub fn thumb_bucket_of(&self, id: PhotoId) -> Option<usize> {
+        self.thumb(id)?;
+        self.thumb_inputs.get(&id).map(|&(_, size, _, _)| size)
+    }
+
     /// Remember the inputs of the thumbnail just requested (`quick`: through a stand-in).
     /// Whether the camera's embedded preview *is* this photo's thumbnail: its quick render arrived
     /// (so `Slot::ThumbQuick` holds the picture) and no edit has moved the photo on to a settings
