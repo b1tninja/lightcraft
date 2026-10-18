@@ -625,7 +625,10 @@ impl Renderer {
         let Some((old, size)) = self.print_gray_inputs.get(&photo.id) else { return false };
         old.as_ptr() == Arc::as_ptr(photo)
             && *size == bucket
-            && (self.textures.contains_key(&slot) || self.pending.contains_key(&slot) || self.failed.contains_key(&slot))
+            // A failure only stands for the catalog revision it happened at: a later one retries (as `request_needed` does).
+            && (self.textures.contains_key(&slot)
+                || self.pending.contains_key(&slot)
+                || self.failed.get(&slot).is_some_and(|f| f.2 == self.catalog_rev))
     }
 
     /// Ask for the gray thumbnail `job` makes (the thumbnail job of `photo` at `bucket`); the texture comes out gray.
@@ -641,9 +644,12 @@ impl Renderer {
         self.drop_print_gray(None);
     }
 
-    /// Once `max` gray thumbnails are held, drop all but the one for `keep` (the photo being asked for).
+    /// Once `max` gray thumbnails are held or requested (rendered, or still queued or running), drop all but the
+    /// one for `keep` (the photo being asked for).
     fn trim_print_gray(&mut self, keep: PhotoId, max: usize) {
-        if self.textures.keys().filter(|s| matches!(s, Slot::PrintGray(_))).count() >= max {
+        let held: std::collections::HashSet<PhotoId> =
+            self.textures.keys().chain(self.pending.keys()).filter_map(|s| if let Slot::PrintGray(id) = s { Some(*id) } else { None }).collect();
+        if held.len() >= max {
             self.drop_print_gray(Some(keep));
         }
     }
@@ -651,7 +657,7 @@ impl Renderer {
     /// Drop the gray thumbnails, their inputs and their queued renders, except the one of `keep`.
     fn drop_print_gray(&mut self, keep: Option<PhotoId>) {
         let dropped = |s: &Slot| matches!(s, Slot::PrintGray(id) if Some(*id) != keep);
-        if self.print_gray_inputs.is_empty() && !self.textures.keys().any(dropped) {
+        if self.print_gray_inputs.is_empty() && !self.textures.keys().any(dropped) && !self.pending.keys().any(dropped) {
             return;
         }
         self.print_gray_inputs.retain(|id, _| Some(*id) == keep);
@@ -1155,6 +1161,18 @@ mod thumbnail_tests {
         assert!(!r.thumb_current(&p, 384, 10));
     }
 
+    // A gray-preview failure belongs to the catalog revision it happened at: after a catalog change the preview asks again.
+    #[test]
+    fn a_gray_preview_failure_is_retried_after_a_catalog_revision() {
+        let p = photo();
+        let mut r = Renderer::default();
+        r.print_gray_inputs.insert(p.id, (Arc::downgrade(&p), 384));
+        r.failed.insert(Slot::PrintGray(p.id), (77, "no decoder".into(), 0, p.id));
+        assert!(r.print_gray_current(&p, 384), "the failure stands at its own revision");
+        r.catalog_rev = 1;
+        assert!(!r.print_gray_current(&p, 384), "a later revision asks again");
+    }
+
     #[test]
     fn a_fast_draft_is_drawn_in_the_frame_that_asked_for_it() {
         let mut s = Session::new();
@@ -1623,6 +1641,26 @@ mod stage_budget_tests {
         r.forget_print_gray();
         assert_eq!(gray(&r), 0, "leaving the dialog releases the last one too");
         assert!(r.textures.contains_key(&Slot::Thumb(PhotoId(1))));
+    }
+
+    // Requests that have not rendered yet count towards the bound, or a burst of requests is never trimmed.
+    #[test]
+    fn pending_gray_requests_count_towards_the_bound() {
+        let ctx = egui::Context::default();
+        let mut r = Renderer::default();
+        for id in 1..=3 {
+            let (slot, tex) = gray_thumb(&ctx, id);
+            r.textures.insert(slot, tex);
+        }
+        for id in 4..=8 {
+            r.pending.insert(Slot::PrintGray(PhotoId(id)), (1, 10));
+        }
+        let gray = |r: &Renderer| r.textures.keys().chain(r.pending.keys()).filter(|s| matches!(s, Slot::PrintGray(_))).count();
+        r.trim_print_gray(PhotoId(9), 9);
+        assert_eq!(gray(&r), 8, "under the bound nothing is dropped");
+        r.trim_print_gray(PhotoId(5), 8);
+        assert_eq!(gray(&r), 1, "textures and pending requests together reach the bound");
+        assert!(r.pending.contains_key(&Slot::PrintGray(PhotoId(5))), "the photo being asked for stays");
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -58,7 +58,8 @@ struct Composing {
     fit: spool::Scaling,
     /// Composed gray: the driver is asked for monochrome too.
     gray: bool,
-    /// For a network print: what the dialog said when Print was pressed.
+    /// For a network print: what the dialog said when Print was pressed (not on the web).
+    #[cfg(not(target_arch = "wasm32"))]
     net: Option<crate::network_glue::Captured>,
     /// The Print Job panel's settings (colour management, print adjustment): the raster of a print is made with them too.
     job: lightcraft_engine::print::PrintJob,

@@ -2442,7 +2442,7 @@
   "The printer accepts none of the formats this document can be sent in": "Der Drucker akzeptiert keines der Formate, in denen dieses Dokument gesendet werden kann",
   "The printer address was refused": "Die Druckeradresse wurde abgelehnt",
   "The printer doesn't support this setting": "Der Drucker unterstützt diese Einstellung nicht",
-  "The printer finished with errors": "Der Drucker wurde mit Fehlern beendet",
+  "The printer finished with errors": "Der Druckauftrag wurde mit Fehlern beendet",
   "The printer is printing it": "Der Drucker druckt es",
   "The printer may have received the document. Check the printer before sending again.": "Der Drucker hat das Dokument möglicherweise erhalten. Prüfen Sie den Drucker, bevor Sie erneut senden.",
   "The printer no longer lists the job; it most likely finished": "Der Drucker führt den Auftrag nicht mehr; er ist sehr wahrscheinlich fertig",
@@ -2464,7 +2464,7 @@
   "Waiting for {printer}: it keeps reporting the same thing. Use Check now.": "Warten auf {printer}: meldet immer dasselbe. Verwenden Sie „Jetzt prüfen“.",
   "Waiting in the printer's queue": "Wartet in der Warteschlange des Druckers",
   "a print or an export is already running": "Ein Druck oder Export läuft bereits",
-  "{printer} finished with errors": "{printer} wurde mit Fehlern beendet",
+  "{printer} finished with errors": "Der Druckauftrag an {printer} wurde mit Fehlern beendet",
   "{printer}: the printer or the send failed": "{printer}: Der Drucker oder das Senden ist fehlgeschlagen",
   "{printer}: {why}": "{printer}: {why}"
 }
