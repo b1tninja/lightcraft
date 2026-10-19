@@ -173,7 +173,8 @@ pub(crate) fn query_printer(transport: Option<Transport>, ctx: Option<egui::Cont
     Box::new(move |address: &str| {
         let (tx, rx) = mpsc::channel();
         let (address, transport, ctx, stations) = (address.to_owned(), transport.clone(), ctx.clone(), Arc::clone(&stations));
-        std::thread::spawn(move || {
+        let failed = tx.clone();
+        let spawned = std::thread::Builder::new().name("printer-query".into()).spawn(move || {
             let result = match station_for(&stations, &address, transport) {
                 Ok(station) => match station.protocol() {
                     station::Protocol::Wsd => station.wsd_info().map(summary).map_err(|e| failure(&e, false)),
@@ -185,6 +186,9 @@ pub(crate) fn query_printer(transport: Option<Transport>, ctx: Option<egui::Cont
             let _ = tx.send(result);
             repaint(&ctx);
         });
+        if let Err(e) = spawned {
+            let _ = failed.send(Err(Failure::new(FailureKind::Other, e.to_string())));
+        }
         rx
     })
 }
@@ -285,7 +289,11 @@ pub(crate) fn send_job(
     (stations, slot): (Stations, Slot),
     confirmed: UserConfirmed,
 ) -> SendJob {
-    Box::new(move |address: &str, request: Request| {
+    Box::new(move |address: &str, mut request: Request| {
+        // The ticked Grayscale box composed gray pages: the printer's Color setting must not print them in colour.
+        if payload.gray && request.color == Some(net::ColorMode::Color) {
+            request.color = Some(net::ColorMode::Monochrome);
+        }
         let (mut job, options) = options(&request, &payload.name);
         job.scaling = payload.fit;
         job.grayscale = payload.gray;
@@ -487,8 +495,15 @@ impl LightcraftApp {
     /// Send the print-ready `pdf` (laid out as `sheets`, whose count is the job's page count) to the queried
     /// printer, off the UI thread. It needs the person's confirmation, which it spends. Returns `true` when a job
     /// started.
-    pub(crate) fn network_send(&mut self, ctx: Option<&egui::Context>, payload: Payload, paper: &str) -> bool {
+    pub(crate) fn network_send(&mut self, ctx: Option<&egui::Context>, mut payload: Payload, paper: &str) -> bool {
         let page_count = payload.pages.len();
+        let media = crate::print_dest::media_for_paper(paper);
+        // A paper the printer does not list is left out of the request: kept at its size, the page would print on the
+        // printer's own paper and be cut off, so it is shrunk to fit that paper instead (and the person is told).
+        let shrunk = payload.fit == Scaling::Exact && media.is_some() && self.print_net.state.draft.request(media).media_size.is_none();
+        if shrunk {
+            payload.fit = Scaling::ShrinkToFit;
+        }
         let net = &mut self.print_net;
         let address = net.state.draft.normalized_url();
         // The attestation comes from the ticked box and nothing else.
@@ -497,7 +512,23 @@ impl LightcraftApp {
         let net = &mut self.print_net;
         // The sheets are the pages of the document sent: the total that progress shows until the printer reports one.
         net.state.draft.expected_pages = u32::try_from(page_count).ok();
-        net.state.start_job(&send, validate(&address).is_ok(), true, FORMATS, crate::print_dest::media_for_paper(paper))
+        let started = net.state.start_job(&send, validate(&address).is_ok(), true, FORMATS, media);
+        if started
+            && shrunk
+            && let Some(ctx) = ctx
+        {
+            let who = tracked::printer_label(&self.print_net.state.draft.printer().map(|p| p.name.clone()).unwrap_or_default());
+            let text = if who == "the printer" {
+                crate::i18n::tr("The printer does not list this paper size: the page is shrunk to fit its own paper.").to_owned()
+            } else {
+                tracked::fill(
+                    crate::i18n::tr("{printer} does not list this paper size: the page is shrunk to fit its own paper."),
+                    &[("printer", &who)],
+                )
+            };
+            self.toast_for(ctx, text, 8.0);
+        }
+        started
     }
 
     /// The small status row of the last tracked print, shown while the Print dialog is closed.

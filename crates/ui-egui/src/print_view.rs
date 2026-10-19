@@ -924,9 +924,10 @@ pub(crate) fn colour_thumb(app: &mut LightcraftApp, id: PhotoId, shown: Rect) ->
 
 /// The photo's thumbnail for the preview, in gray, from a slot of its own: the colour thumbnail is never drawn
 /// (not even for the frames the gray one is rendering), and a toggle back finds the colour one still cached.
-fn gray_thumb(app: &mut LightcraftApp, id: PhotoId, shown: Rect) -> Option<egui::TextureId> {
+pub(crate) fn gray_thumb(app: &mut LightcraftApp, id: PhotoId, shown: Rect) -> Option<egui::TextureId> {
     let px = (shown.width().max(shown.height()) * 2.0).clamp(64.0, 1024.0) as usize;
     let bucket = lightcraft_engine::media::thumb_bucket(px);
+    app.renderer.print_gray_shown(id);
     if let Some(photo) = app.session.catalog.photo(id).cloned()
         && !app.renderer.print_gray_current(&photo, bucket)
         && let Some(job) = app.session.thumb_job(id, px)

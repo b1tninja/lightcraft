@@ -347,3 +347,113 @@ fn the_print_adjustment_reaches_the_raster_sent_to_a_raster_only_printer() {
     assert_eq!(&plain[..4], b"RaS2");
     assert_ne!(plain, bright, "brightness +60 changes the raster that is sent");
 }
+
+/// While the pages are composed the Printer list and the Grayscale box beside it are locked, like the network section:
+/// the dialog never shows one destination while the job goes to another.
+#[test]
+fn the_printer_list_and_grayscale_are_locked_while_the_pages_are_composed() {
+    let printer = FakePrinter::new(Config::default());
+    let mut h = demo_with(&printer);
+    one_photo_on_4x6(&mut h);
+    cmd(&mut h, "dialog.print", json!({}));
+    assert!(h.step_until(T, |h| h.app.print_out.printers.len() == 4), "the queues were listed");
+    choose(&mut h.app, &Entry::System { name: "Front Desk".into(), default: true });
+    h.settle(T);
+    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    // Hold the composition open: its worker's answer never arrives.
+    let (_hold, rx) = channel();
+    h.app.print_out.composing.as_mut().expect("composing").rx = rx;
+    let _ = h.request("ui.clickWidget", json!({"id": "combo:printDestination"}), T);
+    let _ = h.request("ui.clickWidget", json!({"id": "item:printDestination-2"}), T);
+    h.settle(T);
+    assert_eq!(h.app.print_out.dest, Destination::System("Front Desk".into()), "the destination did not change");
+    let _ = h.request("ui.clickWidget", json!({"id": "check:printGrayscale"}), T);
+    h.settle(T);
+    assert!(!h.app.session.print.job.grayscale, "the Grayscale box did not change");
+    // composed: the row is unlocked again
+    h.app.print_out.composing = None;
+    h.settle(T);
+    click(&mut h, "combo:printDestination");
+    click(&mut h, "item:printDestination-2");
+    assert_eq!(h.app.print_out.dest, Destination::System("Copy Room Laser".into()));
+}
+
+const CONFIRM: &str = "I confirm sending this document to this printer";
+
+/// The app in an egui_kittest harness with the Print dialog open on the network printer, already queried.
+fn print_dialog(printer: &Arc<FakePrinter>) -> egui_kittest::Harness<'static, LightcraftApp> {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    app.set_print_transport(Arc::new(MemTransport(Arc::clone(printer))));
+    app.print_net.state.draft = net::Draft::for_address(ADDRESS);
+    let ids: Vec<lightcraft_catalog::PhotoId> = app.session.catalog.photos().take(1).map(|p| p.id).collect();
+    app.session.selection.ids = ids.into_iter().collect();
+    let layout = json!({"layout": {"style": "contactSheet", "grid": {"columns": 1, "rows": 1}, "page": {"paper": "4x6"}}, "job": {"ppi": 72.0}});
+    let set = app.run("print.set", layout);
+    assert!(set.is_ok(), "print.set: {set:?}");
+    let opened = app.run("dialog.print", json!({}));
+    assert!(opened.is_ok(), "dialog.print: {opened:?}");
+    app.print_out.dest = Destination::Network;
+    let worker = app.print_net.query_worker();
+    assert!(app.print_net.state.start_query(&worker, true));
+    let ctx = egui::Context::default();
+    for _ in 0..600 {
+        app.print_net.state.poll(&ctx);
+        if !app.print_net.state.draft.querying() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(app.print_net.state.draft.printer().is_some(), "the printer answered");
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1500.0, 950.0)).build_ui_state(
+        |ui, app: &mut LightcraftApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(6);
+    h
+}
+
+#[test]
+fn ticking_the_confirmation_box_and_clicking_print_starts_one_job() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let printer = FakePrinter::new(Config::default());
+    let mut h = print_dialog(&printer);
+    assert!(!h.state().print_net.state.draft.confirmed, "never ticked by default");
+    h.get_by_label(CONFIRM).click();
+    h.run_steps(4);
+    assert!(h.state().print_net.state.draft.confirmed, "the checkbox is the control that confirms");
+    assert_eq!(printer.jobs(), 0, "ticking sends nothing");
+    let print = h.get_by_role_and_label(egui::accesskit::Role::Button, "Print");
+    assert!(!print.accesskit_node().is_disabled(), "ticked and queried: Print is enabled");
+    print.click();
+    for _ in 0..1200 {
+        h.run_steps(1);
+        if printer.jobs() > 0 && !h.state().print_out.busy() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    h.run_steps(4);
+    assert_eq!(printer.jobs(), 1, "one job started");
+    assert!(!h.state().print_net.state.draft.confirmed, "the job spent the confirmation");
+}
+
+#[test]
+fn closing_and_reopening_the_print_dialog_clears_the_confirmation() {
+    use egui_kittest::kittest::Queryable;
+    let printer = FakePrinter::new(Config::default());
+    let mut h = print_dialog(&printer);
+    h.get_by_label(CONFIRM).click();
+    h.run_steps(4);
+    assert!(h.state().print_net.state.draft.confirmed);
+    h.state_mut().ui.dialog = None;
+    h.run_steps(6);
+    assert!(h.state().print_net.state.draft.confirmed, "closing alone does not decide; reopening does");
+    h.state_mut().run("dialog.print", json!({})).expect("dialog.print");
+    h.run_steps(4);
+    assert!(!h.state().print_net.state.draft.confirmed, "a reopened dialog starts unconfirmed");
+    assert!(h.state().print_net.state.draft.printer().is_some(), "the queried printer is still there");
+    assert_eq!(printer.jobs(), 0, "nothing was submitted");
+}

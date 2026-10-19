@@ -19,11 +19,16 @@ The **Print To** section at the top of the settings column chooses where they go
   each print.
 - **Document**: the Print module's PDF is sent as it is when the printer lists PDF. A printer that lists PWG raster
   (or, for a one-page print, JPEG) gets the same pages as pixels, converted by `lightcraft_print::sheets::SheetConverter`
-  at the resolution you choose or the listed one nearest 300 dpi. Colour or black and white follows the Color option.
+  at the resolution you choose or the listed one nearest 300 dpi. Colour or black and white follows the Color option;
+  with the Grayscale box ticked the pages are gray and the printer is asked for monochrome, whatever the Color option says.
 - **Quality** (Draft, Normal, High, **Photo**), two-sided, copies, resolution and paper (A3 A4 A5 Letter Legal Tabloid, 4x6,
-  5x7, 8x10, 13x19 by their PWG media names) are mapped to craft-print's job options.
+  5x7, 8x10, 13x19 by their PWG media names) are mapped to craft-print's job options. A paper the printer does not list
+  is left out of the job: the page is then shrunk to fit the printer's own paper (`Scaling::ShrinkToFit`) rather than
+  printed at its size and cut off, and a notice says so.
 - **Shrink to the printer's printable area** maps to craft-print's `Scaling::ShrinkToFit`; off is `Scaling::Exact`
   (the page keeps the size it has in the preview).
+- While the pages are composed (after Print, before the job is sent) the Printer list, the Grayscale box and the
+  network section are locked: the job goes where, and as, Print was pressed for.
 - One press of Print is one tracked `PrintJob`: it is sent once, followed to its end and retried only where that cannot
   print twice. A send whose outcome is unknown says so and offers Reconcile (reads the printer's job lists) instead of
   sending again. Every status line names the printer by the name it reported, never by its address.

@@ -215,6 +215,8 @@ pub struct Renderer {
     thumb_inputs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64, bool)>,
     /// Last inputs of the Print dialog's gray previews (photo, size bucket).
     print_gray_inputs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize)>,
+    /// The frame each gray preview was last drawn in ([`Renderer::print_gray_shown`]): the ones on screen are never trimmed.
+    print_gray_used: HashMap<PhotoId, u64>,
     /// Photos whose grid thumbnail is the camera's embedded preview itself (no render behind it).
     embedded_thumbs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64)>,
     pool: JobPool<Slot, Finished>,
@@ -300,6 +302,7 @@ impl Renderer {
             pool: JobPool::new(threads),
             thumb_inputs: HashMap::new(),
             print_gray_inputs: HashMap::new(),
+            print_gray_used: HashMap::new(),
             embedded_thumbs: HashMap::new(),
             offload: None,
             queue: Vec::new(),
@@ -589,6 +592,7 @@ impl Renderer {
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
         self.print_gray_inputs.clear();
+        self.print_gray_used.clear();
         self.textures.clear();
         self.stages.clear();
         self.quick_tried.clear();
@@ -645,28 +649,37 @@ impl Renderer {
         self.request(Slot::PrintGray(photo.id), job, priority);
     }
 
+    /// The Print dialog draws the gray thumbnail of `id` in this frame (call it for every cell, before asking for it).
+    pub fn print_gray_shown(&mut self, id: PhotoId) {
+        self.print_gray_used.insert(id, self.frame);
+    }
+
     /// The Print dialog shows colour (or is closed): drop the gray thumbnails and their queued renders.
     pub fn forget_print_gray(&mut self) {
-        self.drop_print_gray(None);
+        self.drop_print_gray(|_| false);
     }
 
     /// Once `max` gray thumbnails are held or requested (rendered, or still queued or running), drop all but the
-    /// one for `keep` (the photo being asked for).
+    /// one for `keep` (the photo being asked for) and the ones drawn in this frame: a sheet of more cells than `max`
+    /// keeps them all, rather than evicting and asking again for the same ones every frame.
     fn trim_print_gray(&mut self, keep: PhotoId, max: usize) {
         let held: std::collections::HashSet<PhotoId> =
             self.textures.keys().chain(self.pending.keys()).filter_map(|s| if let Slot::PrintGray(id) = s { Some(*id) } else { None }).collect();
         if held.len() >= max {
-            self.drop_print_gray(Some(keep));
+            let (frame, used) = (self.frame, std::mem::take(&mut self.print_gray_used));
+            self.drop_print_gray(|id| id == keep || used.get(&id) == Some(&frame));
+            self.print_gray_used = used.into_iter().filter(|(_, f)| *f == frame).collect();
         }
     }
 
-    /// Drop the gray thumbnails, their inputs and their queued renders, except the one of `keep`.
-    fn drop_print_gray(&mut self, keep: Option<PhotoId>) {
-        let dropped = |s: &Slot| matches!(s, Slot::PrintGray(id) if Some(*id) != keep);
+    /// Drop the gray thumbnails, their inputs and their queued renders, except the ones `kept` picks.
+    fn drop_print_gray(&mut self, kept: impl Fn(PhotoId) -> bool) {
+        let dropped = |s: &Slot| matches!(s, Slot::PrintGray(id) if !kept(*id));
         if self.print_gray_inputs.is_empty() && !self.textures.keys().any(dropped) && !self.pending.keys().any(dropped) {
             return;
         }
-        self.print_gray_inputs.retain(|id, _| Some(*id) == keep);
+        self.print_gray_inputs.retain(|id, _| kept(*id));
+        self.print_gray_used.retain(|id, _| kept(*id));
         self.pool.reprioritize(|s, p| if dropped(s) { None } else { Some(p) });
         self.queue.retain(|q| !dropped(&q.slot));
         self.pending.retain(|s, _| !dropped(s));
@@ -1243,6 +1256,36 @@ mod thumbnail_tests {
     }
     fn request(app: &mut crate::LightcraftApp) {
         crate::panels::grid::request_thumb(app, PhotoId(1), 256, 10);
+    }
+
+    // A sheet of more cells than the bound, with Grayscale on: the previews drawn in the frame are kept, so the next
+    // frame asks for none of them again (it used to drop all but one at the bound and re-request them every frame).
+    #[test]
+    fn a_sheet_of_more_cells_than_the_bound_asks_for_each_gray_preview_once() {
+        let mut s = Session::new();
+        let cells = PRINT_GRAY_KEEP as u64 + 6;
+        for id in 2..=cells {
+            let name = format!("p{id}.jpg");
+            let p = Photo::new(PhotoId(id), Source::File { path: name.clone() }, &name, "JPEG", 600, 400, "2026-01-01");
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        }
+        let (mut app, _work, ctx) = fixture_with(s, (*photo()).clone());
+        let cell = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0));
+        let frame = |app: &mut crate::LightcraftApp| {
+            app.renderer.poll(&ctx, &mut app.session);
+            for id in 1..=cells {
+                crate::print_view::gray_thumb(app, PhotoId(id), cell);
+            }
+            app.renderer.request_ids.iter().filter(|(s, _)| matches!(s, Slot::PrintGray(_))).map(|(s, r)| (*s, *r)).collect::<HashMap<_, _>>()
+        };
+        let first = frame(&mut app);
+        assert_eq!(first.len() as u64, cells, "every cell's gray preview is asked for");
+        assert_eq!(frame(&mut app), first, "the next frame asks for none of them again");
+        // paging on to other photos still trims the ones no longer drawn
+        app.renderer.poll(&ctx, &mut app.session);
+        crate::print_view::gray_thumb(&mut app, PhotoId(1), cell);
+        app.renderer.trim_print_gray(PhotoId(1), 1);
+        assert_eq!(app.renderer.request_ids.keys().filter(|s| matches!(s, Slot::PrintGray(_))).count(), 1);
     }
 
     #[test]

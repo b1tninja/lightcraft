@@ -337,7 +337,15 @@ pub(crate) fn spawn(station: Arc<Station>, job: PrintJob, slot: &Slot, ctx: Opti
     let tracked = Tracked { shared: Arc::clone(&shared), commands: command_tx.clone() };
     let token = job.cancel_token();
     *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(tracked);
-    std::thread::spawn(move || run(&station, job, &shared, &command_rx, &update_tx, &result_tx, ctx.as_ref()));
+    let failed = result_tx.clone();
+    let spawned = std::thread::Builder::new()
+        .name("print-job".into())
+        .spawn(move || run(&station, job, &shared, &command_rx, &update_tx, &result_tx, ctx.as_ref()));
+    if let Err(e) = spawned {
+        // Nothing was sent: the dialog shows the failure, and no status row is left for a print that never ran.
+        *slot.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        let _ = failed.send(Err(Failure::new(FailureKind::Other, e.to_string())));
+    }
     JobHandle::new(
         result_rx,
         Box::new(move || {

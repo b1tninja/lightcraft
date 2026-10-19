@@ -346,20 +346,26 @@ pub fn section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, photos: usize) 
         let entries = app.print_out.entries();
         let selected_text = entries.iter().find(|e| entry_selected(app, e)).map_or_else(String::new, entry_label);
         let mut picked = None;
-        ui.horizontal(|ui| {
-            let combo = egui::ComboBox::from_id_salt("printDestination").width(150.0).selected_text(selected_text).show_ui(ui, |ui| {
-                for (i, e) in entries.iter().enumerate() {
-                    let r = ui.selectable_label(entry_selected(app, e), entry_label(e));
-                    register(ui.ctx(), format!("item:printDestination-{i}"), r.rect);
-                    if r.clicked() {
-                        picked = Some(e.clone());
+        // Locked while the pages are composed, like the network section below: the job goes where Print was pressed for.
+        let composing = app.print_out.composing.is_some();
+        ui.add_enabled_ui(!composing, |ui| {
+            ui.horizontal(|ui| {
+                let combo = egui::ComboBox::from_id_salt("printDestination").width(150.0).selected_text(selected_text).show_ui(ui, |ui| {
+                    for (i, e) in entries.iter().enumerate() {
+                        let r = ui.selectable_label(entry_selected(app, e), entry_label(e));
+                        register(ui.ctx(), format!("item:printDestination-{i}"), r.rect);
+                        if r.clicked() {
+                            picked = Some(e.clone());
+                        }
                     }
-                }
-            });
-            register(ui.ctx(), "combo:printDestination", combo.response.rect);
-            grayscale_box(app, ui);
+                });
+                register(ui.ctx(), "combo:printDestination", combo.response.rect);
+                grayscale_box(app, ui);
+            })
         });
-        if let Some(e) = picked {
+        if let Some(e) = picked
+            && !composing
+        {
             choose(app, &e);
         }
         if app.print_out.printers.is_empty() && !app.print_out.printers_loading {

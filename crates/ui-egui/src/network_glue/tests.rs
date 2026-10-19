@@ -368,3 +368,46 @@ fn the_converter_follows_the_job_and_writes_the_type_it_is_asked_for() {
     let (_, plain) = header_of(Srgb16);
     assert_ne!(adobe[4 + 1796..], plain[4 + 1796..], "Adobe RGB and sRGB describe the colour differently");
 }
+
+/// The fake lists A4 only. A 4 x 6 in page kept at its size would print on A4 cut to its corner: the paper is left out
+/// of the request, so the page is shrunk to fit the printer's paper and the person is told. A listed paper stays exact.
+#[test]
+fn a_paper_the_printer_does_not_list_is_shrunk_to_fit_and_the_person_is_told() {
+    let run = |paper: &str| {
+        let (mut app, _printer) = app(Config::default());
+        query(&mut app);
+        app.print_net.state.draft.confirmed = true;
+        assert!(app.network_send(Some(&egui::Context::default()), payload(), paper));
+        let toast = app.ui.toast.clone().map(|t| t.0);
+        wait(&mut app, |a| !state(a).draft.running());
+        let notes = match &state(&app).draft.job {
+            JobView::Finished(r) => r.notes.clone(),
+            other => panic!("{other:?}"),
+        };
+        (toast, notes)
+    };
+    let scaled = |notes: &[String]| notes.iter().any(|n| n.contains("scaling"));
+    let (toast, notes) = run("4x6");
+    assert!(toast.as_deref().is_some_and(|t| t.contains("does not list this paper size")), "{toast:?}");
+    assert!(scaled(&notes), "the job asked for shrink to fit: {notes:?}");
+    let (toast, notes) = run("a4");
+    assert_eq!(toast, None, "a listed paper says nothing");
+    assert!(!scaled(&notes), "a listed paper stays exact: {notes:?}");
+}
+
+/// With the Grayscale box ticked the pages are gray: the printer's Color setting set to Color must not undo that.
+#[test]
+fn the_grayscale_box_wins_over_the_printers_color_setting() {
+    let raster = |gray: bool| {
+        let (mut app, printer) = app(Config { formats: vec!["image/pwg-raster"], resolutions: vec![(150, 150)], ..Default::default() });
+        query(&mut app);
+        app.print_net.state.draft.confirmed = true;
+        app.print_net.state.draft.color = Some(net::ColorMode::Color);
+        assert!(app.network_send(None, Payload { gray, ..payload() }, "a4"));
+        wait(&mut app, |a| !state(a).draft.running());
+        printer.job(1).unwrap().document.unwrap()
+    };
+    let colours = |doc: &[u8]| u32::from_be_bytes(doc[4 + 420..4 + 424].try_into().unwrap());
+    assert_eq!(colours(&raster(false)), 3, "Color, in colour: RGB raster");
+    assert_eq!(colours(&raster(true)), 1, "Grayscale ticked: a gray raster whatever the Color setting says");
+}
