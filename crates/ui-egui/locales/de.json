@@ -2369,7 +2369,7 @@
   "Following the job {printer} already had.": "Der Auftrag, den {printer} schon hatte, wird verfolgt.",
   "Held by the printer": "Vom Drucker angehalten",
   "Held by {printer}": "Von {printer} angehalten",
-  "I confirm sending this document to this printer": "Ich bestätige, dieses Dokument an diesen Drucker zu senden",
+  "I confirm sending this document unencrypted over the local network to this printer": "Ich bestätige, dieses Dokument unverschlüsselt über das lokale Netzwerk an diesen Drucker zu senden",
   "LightCraft print": "LightCraft-Druck",
   "Look at the printer's job lists (reads only) for a job from the earlier attempt": "In den Auftragslisten des Druckers nachsehen (nur lesend), ob ein Auftrag des früheren Versuchs vorhanden ist",
   "Looking for printers…": "Drucker werden gesucht …",

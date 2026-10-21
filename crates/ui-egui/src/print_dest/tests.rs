@@ -20,7 +20,7 @@ const T: Duration = Duration::from_secs(60);
 pub(super) fn fake_printers() -> Vec<spool::Printer> {
     ["Copy Room Laser", "Front Desk", "Slide Printer", "Photo Lab"]
         .into_iter()
-        .map(|name| spool::Printer { name: name.to_owned(), default: name == "Front Desk", two_sided: None })
+        .map(|name| spool::Printer { name: name.to_owned(), description: String::new(), default: name == "Front Desk", two_sided: None })
         .collect()
 }
 
@@ -378,7 +378,15 @@ fn the_printer_list_and_grayscale_are_locked_while_the_pages_are_composed() {
     assert_eq!(h.app.print_out.dest, Destination::System("Copy Room Laser".into()));
 }
 
-const CONFIRM: &str = "I confirm sending this document to this printer";
+const CONFIRM: &str = "I confirm sending this document unencrypted over the local network to this printer";
+
+/// Network printing is plain HTTP; the confirmation says so (CodeRabbit on #1962).
+#[test]
+fn the_confirmation_discloses_the_unencrypted_transport() {
+    let shown = crate::network_glue::labels().confirm;
+    assert!(shown.contains("unencrypted"), "the confirmation must say the document is sent unencrypted: {shown}");
+    assert_eq!(shown, CONFIRM);
+}
 
 /// The app in an egui_kittest harness with the Print dialog open on the network printer, already queried.
 fn print_dialog(printer: &Arc<FakePrinter>) -> egui_kittest::Harness<'static, LightcraftApp> {

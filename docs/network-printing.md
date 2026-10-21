@@ -15,7 +15,7 @@ The **Print To** section at the top of the settings column chooses where they go
 - **Query printer** reads what the printer is and lists (reads only, no job). Each option shows one of three states:
   supported (a list or range the printer published), unsupported (disabled, with the reason) or not confirmed
   (enabled; the value is sent as a hint).
-- Nothing is sent until the box "I confirm sending this document to this printer" is ticked; the tick is spent by
+- Nothing is sent until the box "I confirm sending this document unencrypted over the local network to this printer" is ticked; the tick is spent by
   each print.
 - **Document**: the Print module's PDF is sent as it is when the printer lists PDF. A printer that lists PWG raster
   (or, for a one-page print, JPEG) gets the same pages as pixels, converted by `lightcraft_print::sheets::SheetConverter`

@@ -413,7 +413,7 @@ pub(crate) fn labels() -> Labels<'static> {
         unsupported_color: crate::i18n::tr("This printer only prints in grayscale."),
         unsupported_resolution: crate::i18n::tr("This printer does not take a resolution setting."),
         unconfirmed_note: crate::i18n::tr("Not confirmed by the printer."),
-        confirm: crate::i18n::tr("I confirm sending this document to this printer"),
+        confirm: crate::i18n::tr("I confirm sending this document unencrypted over the local network to this printer"),
         sending: crate::i18n::tr("Sending to {printer}…"),
         canceling: crate::i18n::tr("Canceling…"),
         cancel: crate::i18n::tr("Cancel"),

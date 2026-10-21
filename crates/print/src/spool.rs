@@ -13,7 +13,7 @@ mod tests {
     use super::*;
 
     fn printer(name: &str, default: bool) -> Printer {
-        Printer { name: name.to_owned(), default, two_sided: None }
+        Printer { name: name.to_owned(), description: String::new(), default, two_sided: None }
     }
 
     #[test]
