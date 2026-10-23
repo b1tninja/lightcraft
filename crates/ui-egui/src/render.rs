@@ -733,7 +733,7 @@ impl Renderer {
         self.pool.reprioritize(|s, p| if dropped(s) { None } else { Some(p) });
         self.queue.retain(|q| !dropped(&q.slot));
         self.pending.retain(|s, _| !dropped(s));
-        self.request_ids.retain(|s, _| !dropped(s));
+        self.requests.retain(|s, _| !dropped(s));
         self.textures.retain(|s, _| !dropped(s));
         self.failed.retain(|s, _| !dropped(s));
     }
@@ -1424,7 +1424,7 @@ mod thumbnail_tests {
             for id in 1..=cells {
                 crate::print_view::gray_thumb(app, PhotoId(id), cell);
             }
-            app.renderer.request_ids.iter().filter(|(s, _)| matches!(s, Slot::PrintGray(_))).map(|(s, r)| (*s, *r)).collect::<HashMap<_, _>>()
+            app.renderer.requests.iter().filter(|(s, _)| matches!(s, Slot::PrintGray(_))).map(|(s, r)| (*s, r.id)).collect::<HashMap<_, _>>()
         };
         let first = frame(&mut app);
         assert_eq!(first.len() as u64, cells, "every cell's gray preview is asked for");
@@ -1433,7 +1433,7 @@ mod thumbnail_tests {
         app.renderer.poll(&ctx, &mut app.session);
         crate::print_view::gray_thumb(&mut app, PhotoId(1), cell);
         app.renderer.trim_print_gray(PhotoId(1), 1);
-        assert_eq!(app.renderer.request_ids.keys().filter(|s| matches!(s, Slot::PrintGray(_))).count(), 1);
+        assert_eq!(app.renderer.requests.keys().filter(|s| matches!(s, Slot::PrintGray(_))).count(), 1);
     }
 
     fn relink_destination() -> std::path::PathBuf {
