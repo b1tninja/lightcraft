@@ -165,6 +165,26 @@ fn the_job_is_accepted_first_and_only_then_followed_to_its_end() {
 }
 
 #[test]
+fn a_network_print_is_a_row_of_the_activity_stack_until_it_settles_and_its_cross_cancels_it() {
+    let (mut app, printer) = app(Config { ending: Ending::Hangs, ..Default::default() });
+    query(&mut app);
+    app.print_net.state.draft.confirmed = true;
+    assert!(send(&mut app));
+    let rows = |app: &LightcraftApp| app.session.activity.list().into_iter().filter(|t| t.kind == "print").collect::<Vec<_>>();
+    let row = rows(&app);
+    assert_eq!(row.len(), 1, "{row:?}");
+    assert!(row[0].cancellable);
+    wait(&mut app, |a| matches!(state(a).draft.job, JobView::Accepted { .. }));
+    assert_eq!(rows(&app).len(), 1, "still going at the printer");
+    // The row's ✕ cancels the print at the printer, once.
+    app.session.activity.cancel(row[0].id).unwrap();
+    wait(&mut app, |a| !state(a).draft.running());
+    assert!(matches!(&state(&app).draft.job, JobView::Finished(r) if r.outcome == Outcome::Canceled), "{:?}", state(&app).draft.job);
+    assert_eq!(printer.actions().iter().filter(|a| *a == "CancelJob").count(), 1);
+    wait(&mut app, |a| rows(a).is_empty());
+}
+
+#[test]
 fn the_documents_page_count_gives_the_progress_a_total_the_printer_does_not_report() {
     let (mut app, _printer) = app(Config { ending: Ending::Hangs, ..Default::default() });
     query(&mut app);

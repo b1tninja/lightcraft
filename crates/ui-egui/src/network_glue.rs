@@ -18,6 +18,7 @@
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 
 use craft_ui::printing::network::{self as net, Failure, FailureKind, JobHandle, Labels, PrinterSummary, QueryPrinter, Request, SendJob};
+use lightcraft_engine::activity::Activity;
 use lightcraft_print::network::ipp::PrinterAttrs;
 use lightcraft_print::network::wsd::PrinterElements;
 use lightcraft_print::network::{self as station, Station};
@@ -77,7 +78,7 @@ pub(crate) struct NetTasks {
     pub(crate) state: net::State,
     query: Option<QueryPrinter>,
     stations: Stations,
-    /// The tracked print of the last job (TEST BUILD): its status line, buttons and the small status row.
+    /// The tracked print of the last job (TEST BUILD): its status line and buttons.
     pub(crate) tracked: Slot,
 }
 
@@ -109,7 +110,7 @@ impl NetTasks {
         let query = self.query.get_or_insert_with(|| query_printer(transport, Some(ctx), stations));
         let host = net::Host { validate: &validate, query, sheets_ok, formats: FORMATS };
         let response = self.state.show(ui, egui::Id::new("network-printer"), &host, &labels());
-        status_block(ui, &self.tracked, false);
+        status_block(ui, &self.tracked);
         response
     }
 }
@@ -287,6 +288,7 @@ pub(crate) fn send_job(
     ctx: Option<egui::Context>,
     payload: Payload,
     (stations, slot): (Stations, Slot),
+    activity: Activity,
     confirmed: UserConfirmed,
 ) -> SendJob {
     Box::new(move |address: &str, mut request: Request| {
@@ -302,7 +304,7 @@ pub(crate) fn send_job(
                 // This print's pages are what the registry converts from, when the printer lists no PDF.
                 station.set_converter(Arc::new(converter_for(&payload)));
                 let print = station.job(payload.pdf.as_ref().clone(), job, options, confirmed);
-                tracked::spawn(station, print, &slot, ctx.clone())
+                tracked::spawn(station, print, &slot, ctx.clone(), &activity)
             }
             Err(e) => {
                 let (tx, rx) = mpsc::channel();
@@ -314,11 +316,10 @@ pub(crate) fn send_job(
 }
 
 /// The status of the tracked print (a line built from its `JobView`, the retry advice, the last answer of a
-/// command) and the buttons that make sense for the state. `row`: the small row shown with the dialog closed
-/// (adds Dismiss).
-pub(crate) fn status_block(ui: &mut egui::Ui, slot: &Slot, row: bool) -> bool {
+/// command) and the buttons that make sense for the state. With the dialog closed the print is a row of the
+/// activity stack instead.
+pub(crate) fn status_block(ui: &mut egui::Ui, slot: &Slot) -> bool {
     let Some(view) = lock(slot).as_ref().and_then(|t| t.view()) else { return false };
-    let mut dismiss = false;
     ui.add_space(4.0);
     ui.label(egui::RichText::new(format!("{}: {}", view.view.title, tracked::status_text(&view.view, &view.name))).strong());
     if let Some(advice) = tracked::advice_text(view.advice, view.lifecycle, &view.name) {
@@ -362,13 +363,7 @@ pub(crate) fn status_block(ui: &mut egui::Ui, slot: &Slot, row: bool) -> bool {
             Command::AcceptFound,
         );
         ask(buttons.refresh, crate::i18n::tr("Check now"), crate::i18n::tr("Read the job's status now"), Command::Refresh);
-        if row && ui.button(crate::i18n::tr("Dismiss")).clicked() {
-            dismiss = true;
-        }
     });
-    if dismiss {
-        *lock(slot) = None;
-    }
     true
 }
 
@@ -508,7 +503,14 @@ impl LightcraftApp {
         let address = net.state.draft.normalized_url();
         // The attestation comes from the ticked box and nothing else.
         let Ok(confirmed) = UserConfirmed::attest(Some(net.state.draft.confirmed)) else { return false };
-        let send = send_job(net.transport(), ctx.cloned(), payload, (Arc::clone(&net.stations), Arc::clone(&net.tracked)), confirmed);
+        let send = send_job(
+            net.transport(),
+            ctx.cloned(),
+            payload,
+            (Arc::clone(&net.stations), Arc::clone(&net.tracked)),
+            self.session.activity.clone(),
+            confirmed,
+        );
         let net = &mut self.print_net;
         // The sheets are the pages of the document sent: the total that progress shows until the printer reports one.
         net.state.draft.expected_pages = u32::try_from(page_count).ok();
@@ -529,22 +531,6 @@ impl LightcraftApp {
             self.toast_for(ctx, text, 8.0);
         }
         started
-    }
-
-    /// The small status row of the last tracked print, shown while the Print dialog is closed.
-    pub(crate) fn show_print_status(&mut self, ctx: &egui::Context) {
-        if self.ui.dialog == Some(crate::state::Dialog::Print) || lock(&self.print_net.tracked).is_none() {
-            return;
-        }
-        let slot = Arc::clone(&self.print_net.tracked);
-        egui::Window::new(crate::i18n::tr("Print status"))
-            .id(egui::Id::new("print-status-row"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, [-12.0, -12.0])
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                status_block(ui, &slot, true);
-            });
     }
 
     /// Collect finished work (each frame), also while the dialog is closed; with the dialog gone the person still

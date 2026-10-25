@@ -499,7 +499,6 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     app.print_out.jobs = pending;
     app.poll_network(ctx);
-    app.show_print_status(ctx);
 }
 
 #[cfg(target_arch = "wasm32")]

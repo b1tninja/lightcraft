@@ -9,8 +9,9 @@
 //! craft-ui's own job model (`printing::network`) is fed from the same worker: `Accepted` when the
 //! printer has the document, `Status` as the printer reports, and the result when the print settles
 //! (ended, needs a person, or accepted with nothing to follow). What happens afterwards (retry,
-//! reconcile) is shown by the status line below the dialog's section and, with the dialog closed,
-//! by the small status row.
+//! reconcile) is shown by the status line below the dialog's section. With the dialog closed the job
+//! is a row of the activity stack (kind `print`): the worker holds its `TaskGuard` until the print
+//! settles, maps the printer's sheet count onto it, and the row's ✕ cancels the print like Cancel print.
 //!
 //! The sentences are catalog messages with `{name}` holes ([`fill`]); no address, URL or id ever reaches one.
 
@@ -20,6 +21,7 @@ use crate::i18n::tr;
 use std::time::{Duration, Instant};
 
 use craft_ui::printing::network::{Failure, FailureKind, JobHandle, JobUpdate, Outcome, Progress, Report, Stage};
+use lightcraft_engine::activity::{Activity, Cancel, TaskGuard};
 use lightcraft_print::network::Station;
 use lightcraft_print::network::{
     AttemptError, CancelToken, ErrorKind, JobState, JobView, LifecycleState, Phase, PrintJob, PrintOutcome, RetryAdvice, RetrySafety, SimpleState,
@@ -77,7 +79,7 @@ impl Tracked {
     }
 }
 
-/// The slot the dialog and the status row read; a new print replaces (and so stops) the old one.
+/// The slot the dialog reads; a new print replaces (and so stops) the old one.
 pub(crate) type Slot = Arc<Mutex<Option<Tracked>>>;
 
 /// A message with its `{name}` holes filled in one pass (a value that looks like a hole is left as it is).
@@ -328,21 +330,23 @@ fn result_of(s: &Snapshot, printer: &str) -> Option<Result<Report, Failure>> {
 }
 
 /// Start the worker for `job` on `station` and return craft-ui's handle for it. The tracked side
-/// (view and commands) is stored in `slot`, replacing the previous print's, whose worker then stops.
-pub(crate) fn spawn(station: Arc<Station>, job: PrintJob, slot: &Slot, ctx: Option<egui::Context>) -> JobHandle {
+/// (view and commands) is stored in `slot`, replacing the previous print's, whose worker then stops. The
+/// worker holds a row of `activity` until the print settles (or the worker ends).
+pub(crate) fn spawn(station: Arc<Station>, job: PrintJob, slot: &Slot, ctx: Option<egui::Context>, activity: &Activity) -> JobHandle {
     let (result_tx, result_rx) = mpsc::channel();
     let (update_tx, update_rx) = mpsc::channel();
     let (command_tx, command_rx) = mpsc::channel();
     let shared = Arc::new(Mutex::new(None));
     let tracked = Tracked { shared: Arc::clone(&shared), commands: command_tx.clone() };
     let token = job.cancel_token();
+    let task = activity.start("print", "Network print", Cancel::Yes);
     *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(tracked);
     let failed = result_tx.clone();
     let spawned = std::thread::Builder::new()
         .name("print-job".into())
-        .spawn(move || run(&station, job, &shared, &command_rx, &update_tx, &result_tx, ctx.as_ref()));
+        .spawn(move || run(&station, job, task, &shared, &command_rx, &update_tx, &result_tx, ctx.as_ref()));
     if let Err(e) = spawned {
-        // Nothing was sent: the dialog shows the failure, and no status row is left for a print that never ran.
+        // Nothing was sent: the dialog shows the failure, and no status is left for a print that never ran.
         *slot.lock().unwrap_or_else(PoisonError::into_inner) = None;
         let _ = failed.send(Err(Failure::new(FailureKind::Other, e.to_string())));
     }
@@ -377,9 +381,11 @@ fn publish(job: &PrintJob, station: &Station, shared: &Mutex<Option<TrackedView>
     snapshot
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run(
     station: &Station,
     mut job: PrintJob,
+    task: TaskGuard,
     shared: &Mutex<Option<TrackedView>>,
     commands: &mpsc::Receiver<Command>,
     updates: &mpsc::Sender<JobUpdate>,
@@ -395,6 +401,8 @@ fn run(
     let mut due = Instant::now();
     let (mut accepted_sent, mut reported) = (false, false);
     let mut last_progress: Option<Progress> = None;
+    // The activity row lives until the print settles; the guard is also dropped if this worker unwinds.
+    let (mut task, mut row_cancel_sent) = (Some(task), false);
     publish(&job, station, shared, None);
     loop {
         let mut note = None;
@@ -410,6 +418,13 @@ fn run(
                 Err(mpsc::TryRecvError::Disconnected) => return,
             }
         }
+        // The row's ✕ (or `activity.cancel`) is a Cancel print, sent once.
+        if !row_cancel_sent && task.as_ref().is_some_and(TaskGuard::is_cancelled) {
+            row_cancel_sent = true;
+            touched = true;
+            job.cancel_token().cancel();
+            note = Some(apply(&mut job, registry, Command::Cancel, &station.display_name()));
+        }
         if touched {
             due = Instant::now();
         }
@@ -424,6 +439,13 @@ fn run(
         }
         if changed || note.is_some() {
             let snapshot = publish(&job, station, shared, note);
+            if snapshot.settled {
+                task = None;
+            } else if let Some(task) = &task {
+                let progress = progress_of(&snapshot);
+                task.progress(u64::from(progress.sheets_done.unwrap_or(0)), u64::from(progress.sheets_total.unwrap_or(0)));
+                task.detail(&printer_label(&station.display_name()));
+            }
             if !reported {
                 if snapshot.remote.is_some() && !accepted_sent {
                     accepted_sent = true;
@@ -447,7 +469,7 @@ fn run(
     }
 }
 
-/// Carry out a command on the job; the answer is a line for the status row.
+/// Carry out a command on the job; the answer is a line for the status.
 fn apply(job: &mut PrintJob, registry: &lightcraft_print::network::Registry, command: Command, name: &str) -> String {
     let who = printer_label(name);
     let say = |template: &str| fill(tr(template), &[("printer", &who)]);
