@@ -235,6 +235,8 @@ pub(crate) fn media_for_paper(paper: &str) -> Option<&'static str> {
         "5x7" => "na_5x7_5x7in",
         "8x10" => "na_8x10_8x10in",
         "13x19" => "na_super-b_13x19in",
+        "postcard" => "jpn_hagaki_100x148mm",
+        "double-postcard" => "jpn_oufuku_148x200mm",
         _ => return None,
     })
 }
@@ -314,7 +316,7 @@ pub fn choose(app: &mut LightcraftApp, e: &Entry) {
 fn grayscale_box(app: &mut LightcraftApp, ui: &mut Ui) {
     let gray = app.session.print.job.grayscale;
     let r = ui.checkbox(&mut { gray }, crate::i18n::tr("Grayscale"));
-    register(ui.ctx(), "check:printGrayscale", r.rect);
+    register(ui, "check:printGrayscale", r.rect);
     if r.clicked()
         && let Err(e) = app.run("print.set", json!({"job": {"grayscale": !gray}}))
     {
@@ -353,13 +355,14 @@ pub fn section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, photos: usize) 
                 let combo = egui::ComboBox::from_id_salt("printDestination").width(150.0).selected_text(selected_text).show_ui(ui, |ui| {
                     for (i, e) in entries.iter().enumerate() {
                         let r = ui.selectable_label(entry_selected(app, e), entry_label(e));
-                        register(ui.ctx(), format!("item:printDestination-{i}"), r.rect);
+                        register(ui, format!("item:printDestination-{i}"), r.rect);
                         if r.clicked() {
                             picked = Some(e.clone());
                         }
                     }
                 });
-                register(ui.ctx(), "combo:printDestination", combo.response.rect);
+                register(ui, "combo:printDestination", combo.response.rect);
+                crate::widgets::name_combo(&combo.response, crate::i18n::tr("Print To"));
                 grayscale_box(app, ui);
             })
         });
@@ -374,7 +377,7 @@ pub fn section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, photos: usize) 
         let out = &mut app.print_out;
         if out.dest != Destination::Pdf {
             let r = ui.checkbox(&mut out.shrink_to_fit, crate::i18n::tr("Shrink to the printer's printable area"));
-            register(ui.ctx(), "check:printShrinkToFit", r.rect);
+            register(ui, "check:printShrinkToFit", r.rect);
             r.on_hover_text(crate::i18n::tr("Off: the page keeps the size it has in the preview. On: the printer scales it into what it can print."));
         }
         if app.print_out.dest == Destination::Network {

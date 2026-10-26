@@ -47,7 +47,8 @@ impl Panel {
 }
 
 fn permissions(panel: &Panel) -> Permissions {
-    if *panel == Panel::Canvas { Permissions::PROTECTED } else { Permissions::default() }
+    // The document view stays docked and open and takes no tabs, but the other panels open beside it.
+    if *panel == Panel::Canvas { Permissions { accepts_splits: true, ..Permissions::PROTECTED } } else { Permissions::default() }
 }
 
 fn tabs(panel: Panel) -> Node<Panel> {
@@ -95,7 +96,7 @@ impl Workspace {
             return Err("The panel layout must contain its document view and bounded hidden panels".into());
         }
         // Saved settings cannot turn the protected document view into a floating or closable tab.
-        if self.layout.floating.iter().any(|group| group.panels.contains(&Panel::Canvas)) {
+        if self.layout.floating.iter().any(|group| group.contains(&Panel::Canvas)) {
             return Err("The document view cannot float".into());
         }
         let mut nodes: Vec<_> = self.layout.root.iter().collect();
@@ -161,7 +162,7 @@ impl Workspace {
         next.hidden.retain(|(id, _)| *id != panel);
         if let Some(saved) = &mut location
             && saved.floating.is_some()
-            && saved.anchor.as_ref().is_some_and(|anchor| !next.layout.floating.iter().any(|group| group.panels.contains(anchor)))
+            && saved.anchor.as_ref().is_some_and(|anchor| !next.layout.floating.iter().any(|group| group.contains(anchor)))
         {
             // The other members of a floating group may have been closed too.
             saved.anchor = None;
@@ -188,10 +189,8 @@ impl Workspace {
     }
 
     pub fn exposed(&self, panel: Panel) -> bool {
-        if self.layout.floating.iter().any(|group| group.panels.get(group.active) == Some(&panel)) {
-            return true;
-        }
-        let mut nodes = self.layout.root.as_ref().map(|node| vec![node]).unwrap_or_default();
+        // A floating window is a tree of groups like the docked layout, so both are searched.
+        let mut nodes: Vec<_> = self.layout.root.iter().chain(self.layout.floating.iter().map(|window| &window.root)).collect();
         while let Some(node) = nodes.pop() {
             match node {
                 Node::Tabs { panels, active } if panels.get(*active) == Some(&panel) => return true,
@@ -370,7 +369,7 @@ pub(crate) fn cancel_replaced_gesture(app: &crate::LightcraftApp, workspace: Opt
         _ => true,
     };
     if replaced && let Some(ctx) = &app.tasks.repaint {
-        craft_ui::docking::cancel_drag::<Panel>(ctx, egui::Id::new("lightcraft-docking"));
+        craft_ui::docking::cancel_drag::<Panel>(ctx, egui::Id::unique("lightcraft-docking"));
     }
 }
 
@@ -397,11 +396,15 @@ fn command_impl(app: &mut crate::LightcraftApp, reset: bool, params: &Value, ren
     Ok(json!({"docking": app.ui.docking}))
 }
 
+/// Draw the docked workspace: restore or fall back from an invalid layout, sync panel
+/// visibility, render the panels and the current view in the canvas, then apply the docking
+/// actions. If the layout changed during the pass, any in-flight dock drag is cancelled and the
+/// docking actions it produced are not applied.
 pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));
     if let Err(error) = workspace.validate().and_then(|()| sync(&mut workspace, app)) {
-        app.ui.toast = Some((format!("Panel layout could not be restored: {error}"), ui.input(|input| input.time) + 8.0, None));
+        app.ui.toast = Some((format!("Panel layout could not be restored: {error}"), app.tick_now() + 8.0, None));
         workspace = from_ui(app);
         let _ = sync(&mut workspace, app);
     }
@@ -413,7 +416,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     style.min_pane = 96.0;
     style.float_label = crate::i18n::tr("Float panel").into();
     style.close_label = crate::i18n::tr("Close panel").into();
-    style.move_label = crate::i18n::tr("Move to group").into();
+    style.move_group_label = crate::i18n::tr("Move to group").into();
     style.panels_label = crate::i18n::tr("Panels").into();
     style.resize_label = crate::i18n::tr("Resize panels").into();
     style.resize_window_label = crate::i18n::tr("Resize panel window").into();
@@ -427,7 +430,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     style.font = t.font(12.0);
     // Tool and preset panels publish hover previews before the photo consumes them.
     let mut canvas = None;
-    let output = DockArea::new(egui::Id::new("lightcraft-docking")).show_with_limits(
+    let output = DockArea::new(egui::Id::unique("lightcraft-docking")).show_with_limits(
         ui,
         &workspace.layout,
         &style,
@@ -439,11 +442,11 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
                 canvas = Some(ui.new_child(egui::UiBuilder::new().id_salt("photo-view").max_rect(ui.max_rect())));
             }
             Panel::Library => {
-                crate::widgets::register(ui.ctx(), "panel:left_panel", ui.max_rect());
+                crate::widgets::register(ui, "panel:left_panel", ui.max_rect());
                 crate::panels::left::show(app, ui);
             }
             Panel::Tools => {
-                crate::widgets::register(ui.ctx(), "panel:right_panel", ui.max_rect());
+                crate::widgets::register(ui, "panel:right_panel", ui.max_rect());
                 crate::panels::right::show(app, ui);
             }
             Panel::Presets => crate::panels::presets::show(app, ui),
@@ -476,7 +479,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     let _ = sync(&mut workspace, app);
     let stale = workspace.layout != rendered.layout || workspace.hidden != rendered.hidden;
     if stale {
-        craft_ui::docking::cancel_drag::<Panel>(ui.ctx(), egui::Id::new("lightcraft-docking"));
+        craft_ui::docking::cancel_drag::<Panel>(ui.ctx(), egui::Id::unique("lightcraft-docking"));
     }
     publish_visibility(app, &workspace);
     app.ui.docking = Some(workspace);
@@ -488,7 +491,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
             .map_err(|error| error.to_string())
             .and_then(|action| command_impl(app, false, &json!({"action": action}), true))
         {
-            app.ui.toast = Some((format!("Panel move was not applied: {error}"), ui.input(|input| input.time) + 8.0, None));
+            app.ui.toast = Some((format!("Panel move was not applied: {error}"), app.tick_now() + 8.0, None));
         }
     }
 }
@@ -516,7 +519,7 @@ pub(crate) fn set_widths(state: &mut crate::UiState, params: &Value) -> Result<(
             }
             continue;
         }
-        if let Some(group) = workspace.layout.floating.iter().find(|group| group.panels.contains(&panel)) {
+        if let Some(group) = workspace.layout.floating.iter().find(|group| group.contains(&panel)) {
             let mut rect = group.rect;
             rect[2] = width;
             workspace.apply(Action::MoveFloating { panel, rect })?;
@@ -529,7 +532,7 @@ pub(crate) fn set_widths(state: &mut crate::UiState, params: &Value) -> Result<(
                 let contains = |node: &Node<Panel>| match node {
                     Node::Tabs { panels, .. } => panels.contains(&panel),
                     Node::Stack { entries } => entries.iter().any(|entry| entry.panel == panel),
-                    Node::Split { .. } => false,
+                    _ => false,
                 };
                 if *axis == SplitAxis::Horizontal {
                     if contains(first) {

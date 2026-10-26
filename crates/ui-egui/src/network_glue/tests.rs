@@ -278,9 +278,13 @@ fn paper_names_map_to_the_sizes_printers_list() {
     assert_eq!(media_for_paper("A4"), Some("iso_a4_210x297mm"));
     assert_eq!(media_for_paper("4x6"), Some("na_index-4x6_4x6in"));
     assert_eq!(media_for_paper("custom"), None);
-    // every paper the Print module offers either has a printer name or is a custom size
+    assert_eq!(media_for_paper("postcard"), Some("jpn_hagaki_100x148mm"));
+    assert_eq!(media_for_paper("double-postcard"), Some("jpn_oufuku_148x200mm"));
+    // every paper the Print module offers either has a printer name or is a custom size: the Japanese photo
+    // sizes and the business card have no standard media name, so they go on the queue's own paper, shrunk to fit
+    let custom = ["l", "2l", "kg", "6cut", "4cut", "business-card"];
     for name in lightcraft_engine::print::layout::paper_names() {
-        assert!(media_for_paper(name).is_some(), "{name}");
+        assert_eq!(media_for_paper(name).is_none(), custom.contains(&name), "{name}");
     }
 }
 
