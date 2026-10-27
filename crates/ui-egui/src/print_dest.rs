@@ -352,7 +352,7 @@ pub fn section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, photos: usize) 
         let composing = app.print_out.composing.is_some();
         ui.add_enabled_ui(!composing, |ui| {
             ui.horizontal(|ui| {
-                let combo = egui::ComboBox::from_id_salt("printDestination").width(150.0).selected_text(selected_text).show_ui(ui, |ui| {
+                let combo = craft_ui::ComboBox::from_id_salt("printDestination").width(150.0).selected_text(selected_text).show_ui(ui, |ui| {
                     for (i, e) in entries.iter().enumerate() {
                         let r = ui.selectable_label(entry_selected(app, e), entry_label(e));
                         register(ui, format!("item:printDestination-{i}"), r.rect);

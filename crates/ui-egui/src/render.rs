@@ -1305,7 +1305,10 @@ mod stage_budget_tests {
     // original the next window is cut from; once the windows are gone the idle trim runs again
     fn gray_thumb(ctx: &egui::Context, id: u64) -> (Slot, Tex) {
         let tex = ctx.load_texture("gray", egui::ColorImage::new([1, 1], vec![egui::Color32::GRAY]), Default::default());
-        (Slot::PrintGray(PhotoId(id)), Tex { look: None, key: 1, photo: PhotoId(id), tex, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None })
+        (
+            Slot::PrintGray(PhotoId(id)),
+            Tex { look: None, key: 1, photo: PhotoId(id), tex, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+        )
     }
 
     // Paging through a big selection with Grayscale on must not keep a gray thumbnail for every photo visited, and
