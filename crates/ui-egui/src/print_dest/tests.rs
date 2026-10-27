@@ -115,7 +115,7 @@ fn one_printer_list_holds_the_pdf_file_the_system_printers_and_the_network_entry
     assert_eq!(h.app.print_out.dest, Destination::Network);
     assert!(h.app.print_out.block.is_some(), "the network section was drawn, and blocks Print");
     assert!(!h.app.print_out.can_confirm(), "not queried, not confirmed");
-    assert!(crate::panels::dialogs::keeps_open(&h.app, &Dialog::Print), "the dialog stays to show the job");
+    assert!(crate::dialogs::keeps_open(&h.app, &Dialog::Print), "the dialog stays to show the job");
     // Print without the query and the tick sends nothing
     assert!(crate::print_dest::start(&mut h.app).is_err());
     assert_eq!(printer.jobs(), 0);
@@ -202,7 +202,7 @@ fn a_gray_print_to_a_system_printer_asks_the_driver_for_monochrome_too() {
     cmd(&mut h, "print.set", json!({"job": {"grayscale": true}}));
     cmd(&mut h, "dialog.print", json!({}));
     choose(&mut h.app, &Entry::System { name: "Photo Lab".into(), default: false });
-    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    crate::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
     assert!(h.step_until(T, |_| submitted_to("Photo Lab").is_some()), "handed to the spooler");
     let (job, pdf) = submitted_to("Photo Lab").expect("job");
     assert!(job.grayscale);
@@ -229,7 +229,7 @@ fn a_slide_shaped_custom_page_goes_on_the_queues_own_paper_and_a_chosen_paper_is
     cmd(&mut h, "print.set", json!({"layout": {"page": {"paper": "custom", "customWidth": 13.33, "customHeight": 7.5}}}));
     cmd(&mut h, "dialog.print", json!({}));
     choose(&mut h.app, &Entry::System { name: "Slide Printer".into(), default: false });
-    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    crate::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
     assert!(h.step_until(T, |_| submitted_to("Slide Printer").is_some()), "handed to the spooler");
     let (job, _) = submitted_to("Slide Printer").expect("job");
     assert_eq!(job.scaling, spool::Scaling::ShrinkToFit, "not refused for lack of a 13.33 x 7.50 in paper");
@@ -239,7 +239,7 @@ fn a_slide_shaped_custom_page_goes_on_the_queues_own_paper_and_a_chosen_paper_is
     h.app.ui.dialog = Some(Dialog::Print);
     choose(&mut h.app, &Entry::System { name: "Copy Room Laser".into(), default: false });
     assert!(h.step_until(T, |h| !h.app.print_out.busy()));
-    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    crate::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
     assert!(h.step_until(T, |_| submitted_to("Copy Room Laser").is_some()), "handed to the spooler");
     assert_eq!(submitted_to("Copy Room Laser").expect("job").0.scaling, spool::Scaling::Exact);
 }
@@ -253,7 +253,7 @@ fn a_print_composed_by_the_dialog_reaches_a_raster_only_printer_as_pwg_at_its_re
     query(&mut h);
     h.app.print_net.state.draft.confirmed = true;
     h.settle(T);
-    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    crate::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
     assert!(h.app.print_out.busy(), "composing on a worker");
     assert!(h.step_until(T, |h| matches!(h.app.print_net.state.draft.job, JobView::Finished(_) | JobView::Failed(_))), "the job ended");
     match &h.app.print_net.state.draft.job {
@@ -279,7 +279,7 @@ fn a_printer_that_lists_pdf_gets_the_print_ready_pdf_with_the_dialogs_paper() {
     query(&mut h);
     h.app.print_net.state.draft.confirmed = true;
     h.settle(T);
-    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    crate::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
     assert!(h.step_until(T, |h| matches!(h.app.print_net.state.draft.job, JobView::Finished(_) | JobView::Failed(_))));
     let sent = printer.job(1).expect("a job").document.expect("a document");
     assert!(sent.starts_with(b"%PDF-"), "the Print module's PDF as it is");
@@ -299,7 +299,7 @@ fn a_setting_changed_while_the_pages_are_composed_sends_nothing_and_keeps_the_co
     query(&mut h);
     h.app.print_net.state.draft.confirmed = true;
     h.settle(T);
-    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    crate::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
     assert!(h.app.print_out.busy(), "the pages are composed on a worker");
     // Frames have not run since Print: the composition cannot have been delivered yet.
     h.app.print_net.state.draft.copies = 3;
@@ -321,7 +321,7 @@ fn an_unchanged_dialog_still_sends_the_job_it_captured() {
     h.app.print_net.state.draft.copies = 2;
     h.app.print_net.state.draft.confirmed = true;
     h.settle(T);
-    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    crate::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
     assert!(h.step_until(T, |h| matches!(h.app.print_net.state.draft.job, JobView::Finished(_) | JobView::Failed(_))));
     assert_eq!(printer.jobs(), 1);
 }
@@ -338,7 +338,7 @@ fn the_print_adjustment_reaches_the_raster_sent_to_a_raster_only_printer() {
         query(&mut h);
         h.app.print_net.state.draft.confirmed = true;
         h.settle(T);
-        crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+        crate::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
         assert!(h.step_until(T, |h| matches!(h.app.print_net.state.draft.job, JobView::Finished(_) | JobView::Failed(_))));
         printer.job(1).expect("a job").document.expect("a document")
     }
@@ -359,7 +359,7 @@ fn the_printer_list_and_grayscale_are_locked_while_the_pages_are_composed() {
     assert!(h.step_until(T, |h| h.app.print_out.printers.len() == 4), "the queues were listed");
     choose(&mut h.app, &Entry::System { name: "Front Desk".into(), default: true });
     h.settle(T);
-    crate::panels::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
+    crate::dialogs::confirm_dialog(&mut h.app, &Dialog::Print).expect("the print starts");
     // Hold the composition open: its worker's answer never arrives.
     let (_hold, rx) = channel();
     h.app.print_out.composing.as_mut().expect("composing").rx = rx;
